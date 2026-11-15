@@ -8,7 +8,14 @@
     "dev:web": "vite --config web/vite.config.ts",
     "build": "tsc -p server && tsc -p web && vite build --config web/vite.config.ts",
     "start": "NODE_ENV=production tsx server/src/index.ts",
-    "test": "tsx server/src/engine/selftest.ts"
+    "test": "tsx server/src/engine/selftest.ts",
+    "app:setup": "npm ci && npm run build && pm2 start ecosystem.config.cjs && pm2 save",
+    "app:update": "git pull --ff-only && npm ci && npm run build && pm2 restart oracle",
+    "app:start": "pm2 start ecosystem.config.cjs",
+    "app:stop": "pm2 stop oracle",
+    "app:restart": "pm2 restart oracle",
+    "app:logs": "pm2 logs oracle",
+    "app:status": "pm2 ls"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

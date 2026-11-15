@@ -23,25 +23,24 @@ Engine self-test: `npm test`.
 
 ## Deploy (PM2)
 
-On the server (needs Node.js 22+ and git):
+On the server (needs Node.js 22+ and git), once:
 
 ```bash
+npm install -g pm2
 git clone https://github.com/myl0204/foooot.git oracle && cd oracle
 # put your .env here (copy it from your machine with scp)
-npm ci && npm run build
-npx pm2 start ecosystem.config.cjs
-npx pm2 startup      # prints one command — run it, so the app starts on reboot
-npx pm2 save
+npm run app:setup     # install, build, start, remember
+pm2 startup           # prints one sudo command — run it so the app survives reboots
 ```
 
 The app is then on port 8787. Day to day:
 
-| Task | Command |
+| Command | What it does |
 |---|---|
-| Update | `git pull && npm ci && npm run build && npx pm2 restart oracle` |
-| Logs | `npx pm2 logs oracle` |
-| Stop / start | `npx pm2 stop oracle` / `npx pm2 start oracle` |
-| Status | `npx pm2 ls` |
+| `npm run app:update` | Pull latest code, rebuild, restart |
+| `npm run app:stop` / `app:start` / `app:restart` | Stop / start / restart |
+| `npm run app:logs` | Follow the logs (Ctrl+C to exit) |
+| `npm run app:status` | Is it running? Memory, restarts |
 
 For HTTPS on a domain, put Caddy in front: see `deploy/Caddyfile`.
 
