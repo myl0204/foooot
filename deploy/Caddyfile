@@ -1,0 +1,6 @@
+# Caddy — copy to /etc/caddy/Caddyfile. Replace the domain with yours;
+# Caddy fetches and renews the HTTPS certificate automatically.
+predictions.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8787
+}
