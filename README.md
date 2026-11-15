@@ -21,6 +21,30 @@ Engine self-test: `npm test`.
 | `ANALYSIS_PROVIDER` | `anthropic` or `openai` to force one when both keys are set (default: Anthropic first). With no key, a clearly-labelled statistical summary is shown. |
 | `FOOTBALL_DATA_API_KEY` / `FOOTBALL_DATA_COMPETITION` | Real fixtures and results from football-data.org (e.g. `PL`, `PD`, `SA`, `BL1`). Without it the app runs on a **demo league of fictional clubs with simulated results**, flagged in the UI. |
 
+## Deploy (PM2)
+
+On the server (needs Node.js 22+ and git):
+
+```bash
+git clone https://github.com/myl0204/foooot.git oracle && cd oracle
+# put your .env here (copy it from your machine with scp)
+npm ci && npm run build
+npx pm2 start ecosystem.config.cjs
+npx pm2 startup      # prints one command — run it, so the app starts on reboot
+npx pm2 save
+```
+
+The app is then on port 8787. Day to day:
+
+| Task | Command |
+|---|---|
+| Update | `git pull && npm ci && npm run build && npx pm2 restart oracle` |
+| Logs | `npx pm2 logs oracle` |
+| Stop / start | `npx pm2 stop oracle` / `npx pm2 start oracle` |
+| Status | `npx pm2 ls` |
+
+For HTTPS on a domain, put Caddy in front: see `deploy/Caddyfile`.
+
 ## Architecture
 
 ```
