@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
 import { pct, useApi, type ModelInfo } from "../api";
 import { Tip, useMounted } from "../components/Charts";
-import { useI18n, type TKey } from "../i18n";
+import { useI18n, useNames, type TKey } from "../i18n";
+import { useLeague } from "../league";
 import { Empty, Loading } from "./Fixtures";
 
 /** Method steps are stored as "<b>Lead.</b> body" — split without injecting HTML. */
@@ -12,7 +13,9 @@ function Step({ text }: { text: string }) {
 
 export function ModelPage() {
   const { t } = useI18n();
-  const { data, loading, error } = useApi<ModelInfo>("/model");
+  const names = useNames();
+  const { league } = useLeague();
+  const { data, loading, error } = useApi<ModelInfo>(league ? `/model?league=${encodeURIComponent(league.id)}` : null);
   const on = useMounted(150);
   if (loading) return <Loading />;
   if (error || !data) return <Empty msg={error ?? t("common.noData")} />;
@@ -23,7 +26,7 @@ export function ModelPage() {
     <div className="stack-l">
       <div className="page-head rise">
         <div>
-          <div className="eyebrow"><span>{t("t.eyebrow")}</span></div>
+          <div className="eyebrow"><span>{t("t.eyebrow")}</span>{league && <><span className="dot" /><span>{names.league(league)}</span></>}</div>
           <h1 className="display">{t("t.title")}</h1>
           <p className="lede">{t("t.lede")}</p>
         </div>
@@ -42,7 +45,9 @@ export function ModelPage() {
           <div className="bars" role="img" aria-label={t("t.byMatchday")}>
             <div className="bars-ref" style={{ bottom: `${(1 / 3) * 100}%` }}><span>{t("t.chance")}</span></div>
             {bt.perDay.map((d) => (
-              <Tip key={d.matchday} label={t("t.mdTip", { md: d.matchday, p: pct(d.accuracy), n: d.n })}>
+              <Tip key={`${d.season}|${d.matchday}`} label={d.season === league?.season
+                ? t("t.mdTip", { md: d.matchday, p: pct(d.accuracy), n: d.n })
+                : t("t.mdTipSeason", { season: d.season, md: d.matchday, p: pct(d.accuracy), n: d.n })}>
                 <div className="bar-col">
                   <div className="bar" style={{ height: on ? `${Math.max(2, d.accuracy * 100)}%` : 0 }} />
                   <span className="bar-x mono">{d.matchday}</span>
@@ -64,10 +69,10 @@ export function ModelPage() {
         <h4 className="card-title">{t("t.recent")}</h4>
         <div className="calls">
           {bt.recent.map((r) => {
-            const pick = r.pick === "home" ? r.home : r.pick === "away" ? r.away : t("common.draw");
+            const pick = r.pick === "home" ? names.team(r.home) : r.pick === "away" ? names.team(r.away) : t("common.draw");
             return (
               <Link to={`/match/${r.matchId}`} key={r.matchId} className={`call ${r.correct ? "hit" : "miss"}`}>
-                <span className="mono">{r.home} {r.score} {r.away}</span>
+                <span className="mono">{names.short(r.home)} {r.score} {names.short(r.away)}</span>
                 <span className="muted">{t("t.pickLabel", { team: pick })}</span>
                 <span>{r.correct ? "✓" : "✕"}</span>
               </Link>

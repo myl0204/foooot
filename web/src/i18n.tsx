@@ -12,9 +12,10 @@ const en = {
   "nav.rankings": "Power Rankings",
   "nav.model": "Track Record",
   "chip.demo": "Demo league · fictional clubs",
-  "chip.demoTitle": "Fictional clubs with simulated results — connect FOOTBALL_DATA_API_KEY for real data",
+  "chip.demoTitle": "Fictional clubs with simulated results — set API_FOOTBALL_KEY for real data",
   "chip.live": "Live data",
-  "chip.liveTitle": "Live data from football-data.org",
+  "chip.liveTitle": "Live data from {source}",
+  "nav.leagues": "Competitions",
   "foot.tagline": "Oracle · probabilistic forecasts, not certainties.",
   "foot.method": "Dixon–Coles Poisson model · Elo cross-check · {analysis}",
   "foot.byClaude": "analysis by {provider}",
@@ -43,7 +44,8 @@ const en = {
   "fx.matchday": "Matchday {n}",
   "fx.featured": "Featured fixture",
   "fx.likeliest": "likeliest",
-  "fx.readAnalysis": "Read the full analysis",
+  "fx.predict": "Predict this match",
+  "fx.noFixtures": "No upcoming fixtures in {league}: the season is over or the next round isn't scheduled yet.",
   "fx.fixtures": "{n} fixtures",
   "fx.pick": "Pick",
   "fx.latest": "Latest results",
@@ -57,7 +59,7 @@ const en = {
   "stat.skill": "Skill over baseline",
   "stat.skillNote": "Information gained per prediction",
   "stat.modelled": "Matches modelled",
-  "stat.modelledNote": "{n} clubs · time-weighted",
+  "stat.modelledNote": "{n} clubs · {s} seasons · time-weighted",
 
   "m.back": "← All fixtures",
   "m.fullTime": "Full time",
@@ -85,6 +87,18 @@ const en = {
   "m.recentForm": "Recent form · newest first",
   "m.h2h": "Head to head",
   "m.formVs": "{score} vs {opp} ({venue})",
+  "m.start": "Start prediction",
+  "m.startFinished": "Reveal the model's call",
+  "m.startNote": "Model trained on {n} matches",
+  "m.calcAria": "Calculating the prediction",
+  "m.calc.data": "Loading {n} matches",
+  "m.calc.model": "Fitting team ratings and scorelines",
+  "m.calc.ai": "{provider} is writing the analysis",
+  "m.calc.stat": "Compiling the statistical brief",
+  "m.calc.k.data": "matches",
+  "m.calc.k.model": "fitting model",
+  "m.calc.k.ai": "writing analysis",
+  "m.predictFailed": "The prediction could not be computed ({err}).",
   "a.loadingAI": "{provider} is studying the matchup…",
   "a.loadingStat": "Compiling the statistical brief…",
   "a.unavailable": "Analysis unavailable: {err}",
@@ -129,6 +143,7 @@ const en = {
   "t.byMatchday": "Accuracy by matchday",
   "t.chance": "33% · chance",
   "t.mdTip": "MD {md}: {p} of {n}",
+  "t.mdTipSeason": "{season} · MD {md}: {p} of {n}",
   "t.method": "Method",
   "t.m1": "<b>Ratings.</b> A Dixon–Coles Poisson model fits an attack and defence strength for every club, weighting recent matches more heavily.",
   "t.m2": "<b>Goals.</b> Those ratings plus home advantage give each side's expected goals for the fixture.",
@@ -147,9 +162,10 @@ const zh: Dict = {
   "nav.rankings": "实力排行",
   "nav.model": "预测战绩",
   "chip.demo": "演示联赛 · 虚构球队",
-  "chip.demoTitle": "虚构球队与模拟赛果 —— 配置 FOOTBALL_DATA_API_KEY 以接入真实数据",
+  "chip.demoTitle": "虚构球队与模拟赛果 —— 配置 API_FOOTBALL_KEY 以接入真实数据",
   "chip.live": "实时数据",
-  "chip.liveTitle": "数据来自 football-data.org",
+  "chip.liveTitle": "数据来自 {source}",
+  "nav.leagues": "赛事",
   "foot.tagline": "Oracle · 概率预测，而非定论。",
   "foot.method": "Dixon–Coles 泊松模型 · Elo 交叉验证 · {analysis}",
   "foot.byClaude": "由 {provider} 撰写分析",
@@ -178,7 +194,8 @@ const zh: Dict = {
   "fx.matchday": "第 {n} 轮",
   "fx.featured": "焦点战",
   "fx.likeliest": "最可能比分",
-  "fx.readAnalysis": "查看完整分析",
+  "fx.predict": "预测这场比赛",
+  "fx.noFixtures": "{league}暂无即将进行的比赛：赛季已结束，或下一轮尚未排期。",
   "fx.fixtures": "{n} 场比赛",
   "fx.pick": "预测",
   "fx.latest": "最新赛果",
@@ -192,7 +209,7 @@ const zh: Dict = {
   "stat.skill": "超越基准",
   "stat.skillNote": "每次预测的信息增益",
   "stat.modelled": "建模场次",
-  "stat.modelledNote": "{n} 支球队 · 时间加权",
+  "stat.modelledNote": "{n} 支球队 · {s} 个赛季 · 时间加权",
 
   "m.back": "← 全部赛程",
   "m.fullTime": "全场结束",
@@ -220,6 +237,18 @@ const zh: Dict = {
   "m.recentForm": "近期状态 · 最新在前",
   "m.h2h": "历史交锋",
   "m.formVs": "{score} 对阵 {opp}（{venue}）",
+  "m.start": "开始预测",
+  "m.startFinished": "查看赛前预测",
+  "m.startNote": "模型已学习 {n} 场比赛",
+  "m.calcAria": "正在计算预测",
+  "m.calc.data": "载入 {n} 场比赛数据",
+  "m.calc.model": "拟合球队攻防，计算比分概率",
+  "m.calc.ai": "{provider} 正在撰写分析",
+  "m.calc.stat": "生成统计简报",
+  "m.calc.k.data": "场比赛",
+  "m.calc.k.model": "模型拟合中",
+  "m.calc.k.ai": "撰写分析中",
+  "m.predictFailed": "预测计算失败（{err}）。",
   "a.loadingAI": "{provider} 正在研究这场对决…",
   "a.loadingStat": "正在生成统计简报…",
   "a.unavailable": "分析暂不可用：{err}",
@@ -264,6 +293,7 @@ const zh: Dict = {
   "t.byMatchday": "各轮准确率",
   "t.chance": "33% · 随机",
   "t.mdTip": "第 {md} 轮：{n} 场中命中 {p}",
+  "t.mdTipSeason": "{season} 赛季第 {md} 轮：{n} 场中命中 {p}",
   "t.method": "方法",
   "t.m1": "<b>评分。</b>Dixon–Coles 泊松模型为每支球队拟合进攻与防守强度，近期比赛权重更高。",
   "t.m2": "<b>进球。</b>结合上述评分与主场优势，得出双方在本场的预期进球。",
@@ -331,4 +361,29 @@ export function ordinal(n: number, lang: Lang) {
   if (lang === "zh") return `第${n}`;
   const s = n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th";
   return `${n}${s}`;
+}
+
+type Named = { name: string; nameZh?: string };
+
+/** Display names in the active language: Chinese club and league names when the server knows them. */
+export function useNames() {
+  const { lang } = useI18n();
+  return useMemo(() => ({
+    team: (t: Named) => (lang === "zh" && t.nameZh) || t.name,
+    /** Compact label: the 3-letter code in English, the (already short) Chinese name in Chinese. */
+    short: (t: Named & { short: string }) => (lang === "zh" && t.nameZh) || t.short,
+    league: (l: Named) => (lang === "zh" && l.nameZh) || l.name,
+  }), [lang]);
+}
+
+const ROUNDS_ZH: Record<string, string> = {
+  "Knockout Round Play-offs": "附加赛", "Play-offs": "附加赛", "Round of 32": "32 强", "Round of 16": "16 强",
+  "Quarter-finals": "1/4 决赛", "Semi-finals": "半决赛", "3rd Place Final": "季军赛", "Final": "决赛",
+};
+
+/** "Matchday 12", or the round name for cup knockouts ("Round of 16" / "16 强"). */
+export function useRoundLabel() {
+  const { t, lang } = useI18n();
+  return (m: { matchday: number; round?: string }) =>
+    m.matchday ? t("fx.matchday", { n: m.matchday }) : (lang === "zh" && m.round && ROUNDS_ZH[m.round]) || m.round || "";
 }

@@ -7,22 +7,22 @@ import { mulberry32, samplePoisson } from "../engine/random.ts";
  * learn from — but none of it is real football data.
  */
 const CLUBS: (Omit<Team, "id"> & { att: number; def: number })[] = [
-  { name: "Aldermoor Athletic", short: "ALD", city: "Aldermoor", colors: ["#9b1c31", "#f2e6c9"], att: 0.32, def: -0.28 },
-  { name: "Port Varanne", short: "PVA", city: "Varanne", colors: ["#0f3d6e", "#e8c15a"], att: 0.28, def: -0.22 },
-  { name: "Kestrel Vale", short: "KES", city: "Kestrel", colors: ["#1f5e3b", "#f4f1e8"], att: 0.18, def: -0.2 },
-  { name: "Redmarsh Rovers", short: "RED", city: "Redmarsh", colors: ["#c2410c", "#1c1917"], att: 0.22, def: -0.05 },
-  { name: "Halcyon City", short: "HAL", city: "Halcyon", colors: ["#7dd3fc", "#0c2340"], att: 0.12, def: -0.12 },
-  { name: "Brightwater FC", short: "BRI", city: "Brightwater", colors: ["#e11d48", "#ffffff"], att: 0.08, def: -0.04 },
-  { name: "Thornbury Wanderers", short: "THO", city: "Thornbury", colors: ["#3f3f46", "#facc15"], att: 0.02, def: -0.08 },
-  { name: "Saltcliff United", short: "SAL", city: "Saltcliff", colors: ["#1e3a8a", "#ffffff"], att: 0.0, def: 0.0 },
-  { name: "Elmstead Town", short: "ELM", city: "Elmstead", colors: ["#6d28d9", "#f5f3ff"], att: -0.04, def: 0.02 },
-  { name: "Corvane Albion", short: "COR", city: "Corvane", colors: ["#111827", "#d1d5db"], att: -0.06, def: 0.06 },
-  { name: "Harrowgate Forest", short: "HAR", city: "Harrowgate", colors: ["#166534", "#fde68a"], att: -0.1, def: 0.04 },
-  { name: "Lindqvist Park", short: "LIN", city: "Lindqvist", colors: ["#b45309", "#1f2937"], att: -0.08, def: 0.1 },
-  { name: "Mirefield Borough", short: "MIR", city: "Mirefield", colors: ["#0e7490", "#ecfeff"], att: -0.16, def: 0.08 },
-  { name: "Ostrava Vale", short: "OST", city: "Ostrava", colors: ["#be123c", "#0f172a"], att: -0.14, def: 0.16 },
-  { name: "Cinderford", short: "CIN", city: "Cinderford", colors: ["#57534e", "#f97316"], att: -0.22, def: 0.18 },
-  { name: "Wexley Rangers", short: "WEX", city: "Wexley", colors: ["#1d4ed8", "#dc2626"], att: -0.26, def: 0.22 },
+  { name: "Aldermoor Athletic", nameZh: "奥德摩尔竞技", short: "ALD", city: "Aldermoor", colors: ["#9b1c31", "#f2e6c9"], att: 0.32, def: -0.28 },
+  { name: "Port Varanne", nameZh: "瓦兰港", short: "PVA", city: "Varanne", colors: ["#0f3d6e", "#e8c15a"], att: 0.28, def: -0.22 },
+  { name: "Kestrel Vale", nameZh: "红隼谷", short: "KES", city: "Kestrel", colors: ["#1f5e3b", "#f4f1e8"], att: 0.18, def: -0.2 },
+  { name: "Redmarsh Rovers", nameZh: "红沼流浪者", short: "RED", city: "Redmarsh", colors: ["#c2410c", "#1c1917"], att: 0.22, def: -0.05 },
+  { name: "Halcyon City", nameZh: "哈尔西恩城", short: "HAL", city: "Halcyon", colors: ["#7dd3fc", "#0c2340"], att: 0.12, def: -0.12 },
+  { name: "Brightwater FC", nameZh: "明水", short: "BRI", city: "Brightwater", colors: ["#e11d48", "#ffffff"], att: 0.08, def: -0.04 },
+  { name: "Thornbury Wanderers", nameZh: "桑伯里漫游者", short: "THO", city: "Thornbury", colors: ["#3f3f46", "#facc15"], att: 0.02, def: -0.08 },
+  { name: "Saltcliff United", nameZh: "盐崖联", short: "SAL", city: "Saltcliff", colors: ["#1e3a8a", "#ffffff"], att: 0.0, def: 0.0 },
+  { name: "Elmstead Town", nameZh: "榆树镇", short: "ELM", city: "Elmstead", colors: ["#6d28d9", "#f5f3ff"], att: -0.04, def: 0.02 },
+  { name: "Corvane Albion", nameZh: "科尔文阿尔比恩", short: "COR", city: "Corvane", colors: ["#111827", "#d1d5db"], att: -0.06, def: 0.06 },
+  { name: "Harrowgate Forest", nameZh: "哈罗盖特森林", short: "HAR", city: "Harrowgate", colors: ["#166534", "#fde68a"], att: -0.1, def: 0.04 },
+  { name: "Lindqvist Park", nameZh: "林德奎斯特公园", short: "LIN", city: "Lindqvist", colors: ["#b45309", "#1f2937"], att: -0.08, def: 0.1 },
+  { name: "Mirefield Borough", nameZh: "米尔菲尔德", short: "MIR", city: "Mirefield", colors: ["#0e7490", "#ecfeff"], att: -0.16, def: 0.08 },
+  { name: "Ostrava Vale", nameZh: "俄斯特拉谷", short: "OST", city: "Ostrava", colors: ["#be123c", "#0f172a"], att: -0.14, def: 0.16 },
+  { name: "Cinderford", nameZh: "辛德福德", short: "CIN", city: "Cinderford", colors: ["#57534e", "#f97316"], att: -0.22, def: 0.18 },
+  { name: "Wexley Rangers", nameZh: "韦克斯利流浪者", short: "WEX", city: "Wexley", colors: ["#1d4ed8", "#dc2626"], att: -0.26, def: 0.22 },
 ];
 
 const PLAYED_MATCHDAYS = 14;
@@ -78,16 +78,20 @@ export function buildDemoDataset(today = new Date()): Dataset {
       const la = Math.exp(Math.log(1.15) + S * (ta.att + th.def) + noise());
       const hg = samplePoisson(lh, rnd), ag = samplePoisson(la, rnd);
       matches.push({
-        id: `md${md}-${h}-${a}`, date: date.toISOString(), matchday: md, homeId: h, awayId: a,
+        id: `md${md}-${h}-${a}`, date: date.toISOString(), season: String(today.getUTCFullYear()), matchday: md, homeId: h, awayId: a,
         status: finished ? "finished" : "scheduled",
         ...(finished ? { homeGoals: hg, awayGoals: ag } : {}),
       });
     });
   });
 
+  const year = today.getUTCFullYear();
   return {
     source: "demo",
-    league: { name: "Meridian Premier Division", season: `${today.getUTCFullYear()}/${String((today.getUTCFullYear() + 1) % 100).padStart(2, "0")}` },
+    league: {
+      id: "demo", name: "Meridian Premier Division", nameZh: "子午线超级联赛",
+      season: String(year), seasonLabel: `${year}/${String((year + 1) % 100).padStart(2, "0")}`,
+    },
     teams,
     matches,
   };

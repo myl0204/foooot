@@ -2,14 +2,17 @@ import { useMemo, useState } from "react";
 import { useApi, type Standing } from "../api";
 import { Crest } from "../components/Crest";
 import { FormPills, Tip, useMounted } from "../components/Charts";
-import { useI18n } from "../i18n";
+import { useI18n, useNames } from "../i18n";
+import { useLeague } from "../league";
 import { Empty, Loading } from "./Fixtures";
 
 type SortKey = "position" | "strength" | "attackRating" | "defenseRating" | "elo";
 
 export function Rankings() {
   const { t } = useI18n();
-  const { data, loading, error } = useApi<Standing[]>("/standings");
+  const names = useNames();
+  const { league } = useLeague();
+  const { data, loading, error } = useApi<Standing[]>(league ? `/standings?league=${encodeURIComponent(league.id)}` : null);
   const [sort, setSort] = useState<SortKey>("strength");
   const on = useMounted(150);
   const rows = useMemo(() => {
@@ -28,7 +31,7 @@ export function Rankings() {
     <div className="stack-l">
       <div className="page-head rise">
         <div>
-          <div className="eyebrow"><span>{t("r.eyebrow")}</span></div>
+          <div className="eyebrow"><span>{t("r.eyebrow")}</span>{league && <><span className="dot" /><span>{names.league(league)} {league.seasonLabel}</span></>}</div>
           <h1 className="display">{t("r.title")}</h1>
           <p className="lede">{t("r.lede")}</p>
         </div>
@@ -47,7 +50,7 @@ export function Rankings() {
         {rows.map((r, i) => (
           <div key={r.team.id} className="trow">
             <span className="mono muted">{sort === "position" ? r.position : i + 1}</span>
-            <span className="t-club"><Crest team={r.team} size={26} /><span>{r.team.name}</span></span>
+            <span className="t-club"><Crest team={r.team} size={26} /><span>{names.team(r.team)}</span></span>
             <span className="mono hide-s">{r.played}</span>
             <span className="mono hide-s">{r.gf - r.ga > 0 ? "+" : ""}{r.gf - r.ga}</span>
             <span className="mono strong">{r.points}</span>

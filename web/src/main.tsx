@@ -3,8 +3,9 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, NavLink, Route, Routes, Link, useLocation } from "react-router-dom";
 import { useEffect } from "react";
 import "./styles.css";
-import { providerName, useApi, type Meta } from "./api";
+import { providerName, sourceName, useApi, type Meta } from "./api";
 import { I18nProvider, LANGS, useI18n } from "./i18n";
+import { LeagueBar, LeagueProvider } from "./league";
 import { Fixtures } from "./pages/Fixtures";
 import { MatchPage } from "./pages/Match";
 import { Rankings } from "./pages/Rankings";
@@ -53,7 +54,7 @@ function Shell() {
   const { t } = useI18n();
   const { pathname } = useLocation();
   return (
-    <>
+    <LeagueProvider leagues={meta?.leagues ?? []}>
       <div className="ambient" aria-hidden="true" />
       <header className="nav">
         <Link to="/" className="brand">
@@ -69,7 +70,7 @@ function Shell() {
         <div className="nav-meta">
           {meta && (
             <span className={`chip ${meta.dataSource === "demo" ? "chip-demo" : "chip-live"}`}
-              title={meta.dataSource === "demo" ? t("chip.demoTitle") : t("chip.liveTitle")}>
+              title={meta.dataSource === "demo" ? t("chip.demoTitle") : t("chip.liveTitle", { source: sourceName(meta.dataSource) })}>
               <i />{meta.dataSource === "demo" ? t("chip.demo") : t("chip.live")}
             </span>
           )}
@@ -77,10 +78,11 @@ function Shell() {
         </div>
       </header>
       {meta?.warning && <div className="banner">{meta.warning}</div>}
+      <LeagueBar />
       <main className="page">
         <PageBoundary key={pathname} message={t("common.crashed")} retry={t("common.retry")}>
         <Routes>
-          <Route path="/" element={<Fixtures meta={meta} />} />
+          <Route path="/" element={<Fixtures />} />
           <Route path="/match/:id" element={<MatchPage meta={meta} />} />
           <Route path="/rankings" element={<Rankings />} />
           <Route path="/model" element={<ModelPage />} />
@@ -91,7 +93,7 @@ function Shell() {
         <span>{t("foot.tagline")}</span>
         <span className="muted">{t("foot.method", { analysis: meta?.aiEnabled ? t("foot.byClaude", { provider: providerName(meta.aiProvider) }) : t("foot.statistical") })}</span>
       </footer>
-    </>
+    </LeagueProvider>
   );
 }
 

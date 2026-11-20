@@ -1,24 +1,59 @@
 import { Link } from "react-router-dom";
-import { kickoff, longDate, pct, useApi, type Meta, type ModelInfo, type Summary } from "../api";
+import { kickoff, longDate, pct, useApi, type ModelInfo, type Summary } from "../api";
 import { Crest } from "../components/Crest";
 import { ConfidenceDots, OutcomeBar } from "../components/Charts";
-import { useI18n } from "../i18n";
+import { useI18n, useNames, useRoundLabel } from "../i18n";
+import { useLeague } from "../league";
 
-export function Fixtures({ meta }: { meta?: Meta }) {
+export function Fixtures() {
   const { t, locale } = useI18n();
-  const fx = useApi<Summary[]>("/fixtures?limit=24");
-  const results = useApi<Summary[]>("/results?limit=8");
-  const model = useApi<ModelInfo>("/model");
+  const names = useNames();
+  const roundLabel = useRoundLabel();
+  const { league } = useLeague();
+  const q = league ? `league=${encodeURIComponent(league.id)}` : null;
+  const fx = useApi<Summary[]>(q && `/fixtures?${q}&limit=24`);
+  const results = useApi<Summary[]>(q && `/results?${q}&limit=8`);
+  const model = useApi<ModelInfo>(q && `/model?${q}`);
 
   if (fx.loading) return <Loading />;
-  if (fx.error || !fx.data?.length) return <Empty msg={fx.error ?? t("common.noFixtures")} />;
+  if (fx.error || !fx.data) return <Empty msg={fx.error ?? t("common.noFixtures")} />;
 
   const list = fx.data;
-  const firstMd = list[0].matchday;
-  const nextRound = list.filter((m) => m.matchday === firstMd);
-  const featured = [...nextRound].sort((a, b) => interest(b) - interest(a))[0];
-  const rounds = groupBy(list.filter((m) => m.id !== featured.id), (m) => m.matchday).slice(0, 2);
   const bt = model.data?.backtest;
+  const stats = bt && league && (
+    <section className="stats rise" style={{ animationDelay: "80ms" }}>
+      <Stat value={pct(bt.accuracy)} label={t("stat.accuracy")} note={t("stat.accuracyNote", { n: bt.matches })} />
+      <Stat value={bt.logLoss.toFixed(3)} label={t("stat.logloss")} note={t("stat.loglossNote", { b: bt.baselineLogLoss.toFixed(3) })} />
+      <Stat value={`${((1 - bt.logLoss / bt.baselineLogLoss) * 100).toFixed(1)}%`} label={t("stat.skill")} note={t("stat.skillNote")} />
+      <Stat value={league.played.toLocaleString(locale)} label={t("stat.modelled")} note={t("stat.modelledNote", { n: league.teams, s: league.seasons })} />
+    </section>
+  );
+  const latest = results.data && results.data.length > 0 && (
+    <section className="rise" style={{ animationDelay: "260ms" }}>
+      <div className="section-head">
+        <h3>{t("fx.latest")}</h3>
+        <span className="muted">{t("fx.latestSub")}</span>
+      </div>
+      <div className="results">
+        {results.data.map((m) => <ResultRow key={m.id} m={m} />)}
+      </div>
+    </section>
+  );
+
+  // Between seasons (or before the next round is scheduled) there is nothing to feature.
+  if (!list.length) {
+    return (
+      <div className="stack-xl">
+        <div className="loading short">{t("fx.noFixtures", { league: league ? names.league(league) : "" })}</div>
+        {stats}
+        {latest}
+      </div>
+    );
+  }
+
+  const nextRound = list.filter((m) => roundKey(m) === roundKey(list[0]));
+  const featured = [...nextRound].sort((a, b) => interest(b) - interest(a))[0];
+  const rounds = groupBy(list.filter((m) => m.id !== featured.id), roundKey).slice(0, 2);
   const fp = featured.prediction;
 
   return (
@@ -26,15 +61,15 @@ export function Fixtures({ meta }: { meta?: Meta }) {
       <section className="hero rise">
         <div className="hero-pitch" aria-hidden="true" />
         <div className="eyebrow">
-          <span>{meta?.league.name ?? ""}</span><span className="dot" />
-          <span>{t("fx.matchday", { n: featured.matchday })}</span><span className="dot" />
+          <span>{league ? names.league(league) : ""}</span><span className="dot" />
+          <span>{roundLabel(featured)}</span><span className="dot" />
           <span>{t("fx.featured")}</span>
         </div>
 
         <div className="hero-duel">
           <div className="hero-team">
             <Crest team={featured.home} size={96} />
-            <h2>{featured.home.name}</h2>
+            <h2>{names.team(featured.home)}</h2>
             <span className="muted">{t("common.home")}</span>
           </div>
           <div className="hero-core">
@@ -44,34 +79,27 @@ export function Fixtures({ meta }: { meta?: Meta }) {
               <Prob label={t("common.draw")} p={fp.pDraw} k="draw" big={fp.pick === "draw"} />
               <Prob label={t("common.away")} p={fp.pAway} k="away" big={fp.pick === "away"} />
             </div>
-            <OutcomeBar {...fp} homeName={featured.home.short} awayName={featured.away.short} height={8} />
+            <OutcomeBar {...fp} homeName={names.short(featured.home)} awayName={names.short(featured.away)} height={8} />
             <div className="hero-xg mono">
               xG <b>{fp.lambdaHome.toFixed(2)}</b> — <b>{fp.lambdaAway.toFixed(2)}</b>
               <span className="sep" /> {t("fx.likeliest")} {fp.topScore.home}–{fp.topScore.away}
             </div>
-            <Link to={`/match/${featured.id}`} className="btn-gold">{t("fx.readAnalysis")} <span aria-hidden="true">→</span></Link>
+            <Link to={`/match/${featured.id}`} className="btn-gold">{t("fx.predict")} <span aria-hidden="true">→</span></Link>
           </div>
           <div className="hero-team">
             <Crest team={featured.away} size={96} />
-            <h2>{featured.away.name}</h2>
+            <h2>{names.team(featured.away)}</h2>
             <span className="muted">{t("common.away")}</span>
           </div>
         </div>
       </section>
 
-      {bt && (
-        <section className="stats rise" style={{ animationDelay: "80ms" }}>
-          <Stat value={pct(bt.accuracy)} label={t("stat.accuracy")} note={t("stat.accuracyNote", { n: bt.matches })} />
-          <Stat value={bt.logLoss.toFixed(3)} label={t("stat.logloss")} note={t("stat.loglossNote", { b: bt.baselineLogLoss.toFixed(3) })} />
-          <Stat value={`${((1 - bt.logLoss / bt.baselineLogLoss) * 100).toFixed(1)}%`} label={t("stat.skill")} note={t("stat.skillNote")} />
-          <Stat value={String(meta?.played ?? "—")} label={t("stat.modelled")} note={t("stat.modelledNote", { n: meta?.teams ?? "" })} />
-        </section>
-      )}
+      {stats}
 
-      {rounds.map(([md, games], i) => (
-        <section key={md} className="rise" style={{ animationDelay: `${140 + i * 60}ms` }}>
+      {rounds.map(([key, games], i) => (
+        <section key={key} className="rise" style={{ animationDelay: `${140 + i * 60}ms` }}>
           <div className="section-head">
-            <h3>{t("fx.matchday", { n: md })}</h3>
+            <h3>{roundLabel(games[0])}</h3>
             <span className="muted">{t("fx.fixtures", { n: games.length })} · {longDate(games[0].date, locale)}</span>
           </div>
           <div className="fx-grid">
@@ -80,25 +108,16 @@ export function Fixtures({ meta }: { meta?: Meta }) {
         </section>
       ))}
 
-      {results.data && results.data.length > 0 && (
-        <section className="rise" style={{ animationDelay: "260ms" }}>
-          <div className="section-head">
-            <h3>{t("fx.latest")}</h3>
-            <span className="muted">{t("fx.latestSub")}</span>
-          </div>
-          <div className="results">
-            {results.data.map((m) => <ResultRow key={m.id} m={m} />)}
-          </div>
-        </section>
-      )}
+      {latest}
     </div>
   );
 }
 
 function FixtureCard({ m }: { m: Summary }) {
   const { t, locale } = useI18n();
+  const names = useNames();
   const p = m.prediction;
-  const pickName = p.pick === "home" ? m.home.name : p.pick === "away" ? m.away.name : t("common.draw");
+  const pickName = p.pick === "home" ? names.team(m.home) : p.pick === "away" ? names.team(m.away) : t("common.draw");
   return (
     <Link to={`/match/${m.id}`} className="card fx">
       <div className="fx-top">
@@ -109,7 +128,7 @@ function FixtureCard({ m }: { m: Summary }) {
         <TeamLine team={m.home} p={p.pHome} lead={p.pick === "home"} />
         <TeamLine team={m.away} p={p.pAway} lead={p.pick === "away"} />
       </div>
-      <OutcomeBar {...p} homeName={m.home.short} awayName={m.away.short} />
+      <OutcomeBar {...p} homeName={names.short(m.home)} awayName={names.short(m.away)} />
       <div className="fx-foot">
         <span>{t("fx.pick")} <b>{pickName}</b></span>
         <span className="mono muted">{t("common.draw")} {pct(p.pDraw)} · {p.topScore.home}–{p.topScore.away}</span>
@@ -119,10 +138,11 @@ function FixtureCard({ m }: { m: Summary }) {
 }
 
 function TeamLine({ team, p, lead }: { team: Summary["home"]; p: number; lead: boolean }) {
+  const names = useNames();
   return (
     <div className={`fx-team ${lead ? "lead" : ""}`}>
       <Crest team={team} size={28} />
-      <span className="fx-name">{team.name}</span>
+      <span className="fx-name">{names.team(team)}</span>
       <span className="fx-p mono">{pct(p)}</span>
     </div>
   );
@@ -130,13 +150,14 @@ function TeamLine({ team, p, lead }: { team: Summary["home"]; p: number; lead: b
 
 function ResultRow({ m }: { m: Summary }) {
   const { t } = useI18n();
+  const names = useNames();
   const actual = m.homeGoals! > m.awayGoals! ? "home" : m.homeGoals === m.awayGoals ? "draw" : "away";
   const hit = actual === m.prediction.pick;
   return (
     <Link to={`/match/${m.id}`} className="result">
-      <span className="r-team right">{m.home.name}<Crest team={m.home} size={22} /></span>
+      <span className="r-team right">{names.team(m.home)}<Crest team={m.home} size={22} /></span>
       <span className="r-score mono">{m.homeGoals}<i>–</i>{m.awayGoals}</span>
-      <span className="r-team"><Crest team={m.away} size={22} />{m.away.name}</span>
+      <span className="r-team"><Crest team={m.away} size={22} />{names.team(m.away)}</span>
       <span className={`r-verdict ${hit ? "hit" : "miss"}`}>{hit ? t("fx.called") : t("fx.missed")}</span>
     </Link>
   );
@@ -163,8 +184,10 @@ function Stat({ value, label, note }: { value: string; label: string; note: stri
 
 const interest = (s: Summary) => (1 - Math.abs(s.prediction.pHome - s.prediction.pAway)) * (s.prediction.lambdaHome + s.prediction.lambdaAway);
 
-function groupBy<T>(xs: T[], key: (x: T) => number): [number, T[]][] {
-  const m = new Map<number, T[]>();
+const roundKey = (m: Summary) => `${m.matchday}|${m.round ?? ""}`;
+
+function groupBy<T>(xs: T[], key: (x: T) => string): [string, T[]][] {
+  const m = new Map<string, T[]>();
   for (const x of xs) { const k = key(x); if (!m.has(k)) m.set(k, []); m.get(k)!.push(x); }
   return [...m.entries()];
 }

@@ -1,11 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
-import { zodTextFormat } from "openai/helpers/zod";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
-import type { MatchDetail } from "../types.ts";
+import type { League, MatchDetail, Team } from "../types.ts";
+import { aiProvider, generateStructured } from "./llm.ts";
 
 export const AnalysisSchema = z.object({
   headline: z.string().describe("A sharp 4-9 word editorial headline for the match preview"),
@@ -38,17 +35,24 @@ Rules:
 
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 
-function briefing(d: MatchDetail, league: string) {
+/** Club names in the analysis language: Chinese names (when known) replace names and 3-letter codes. */
+const namer = (lang: Lang) => ({
+  name: (t: Team) => (lang === "zh" && t.nameZh) || t.name,
+  code: (t: Team) => (lang === "zh" && t.nameZh) || t.short,
+});
+
+function briefing(d: MatchDetail, league: League, lang: Lang) {
   const p = d.prediction;
+  const n = namer(lang);
   const side = (t: MatchDetail["home"], venue: string) => ({
-    club: t.team.name,
+    club: n.name(t.team),
     venue,
     tablePosition: t.position,
     points: t.points,
     played: t.played,
     goalsFor: t.gf,
     goalsAgainst: t.ga,
-    lastFive: t.form.map((f) => `${f.result} ${f.gf}-${f.ga} vs ${f.opponent} (${f.venue})`),
+    lastFive: t.form.map((f) => `${f.result} ${f.gf}-${f.ga} vs ${(lang === "zh" && f.opponentZh) || f.opponent} (${f.venue})`),
     lastFivePoints: t.formPoints,
     [`${venue.toLowerCase()}Record`]: `W${t.venueRecord.w} D${t.venueRecord.d} L${t.venueRecord.l}, goals ${t.venueRecord.gf}-${t.venueRecord.ga}`,
     attackRating: `${t.attackRating.toFixed(2)}x league average (rank ${t.attackRank})`,
@@ -56,8 +60,9 @@ function briefing(d: MatchDetail, league: string) {
     elo: t.elo,
     restDays: t.restDays,
   });
+  const [hc, ac] = [n.code(d.home.team), n.code(d.away.team)];
   return {
-    competition: league,
+    competition: (lang === "zh" && league.nameZh) || league.name,
     kickoff: d.match.date,
     home: side(d.home, "Home"),
     away: side(d.away, "Away"),
@@ -70,7 +75,7 @@ function briefing(d: MatchDetail, league: string) {
       likeliestScores: p.topScores.slice(0, 4).map((s) => `${s.home}-${s.away} (${pct(s.p)})`),
       eloHomeExpectedScore: pct(d.elo.pHomeWinish),
     },
-    headToHeadThisDataset: d.headToHead.map((m) => `${m.homeId === d.match.homeId ? d.home.team.short : d.away.team.short} ${m.homeGoals}-${m.awayGoals} ${m.homeId === d.match.homeId ? d.away.team.short : d.home.team.short}`),
+    headToHeadThisDataset: d.headToHead.map((m) => (m.homeId === d.match.homeId ? `${hc} ${m.homeGoals}-${m.awayGoals} ${ac}` : `${ac} ${m.homeGoals}-${m.awayGoals} ${hc}`)),
   };
 }
 
@@ -81,36 +86,17 @@ try { cache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); } catch { /* fres
 const persist = () => { fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true }); fs.writeFileSync(CACHE_FILE, JSON.stringify(cache)); };
 const inflight = new Map<string, Promise<AnalysisResult>>();
 
-export type Provider = "anthropic" | "openai";
-
-/**
- * Which AI writes the analysis. ANALYSIS_PROVIDER forces one; otherwise the first
- * provider with a key wins (Anthropic, then OpenAI). null = statistical fallback only.
- */
-export function aiProvider(): Provider | null {
-  const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
-  const forced = process.env.ANALYSIS_PROVIDER?.toLowerCase();
-  if (forced === "openai") return hasOpenAI ? "openai" : null;
-  if (forced === "anthropic") return hasAnthropic ? "anthropic" : null;
-  return hasAnthropic ? "anthropic" : hasOpenAI ? "openai" : null;
-}
-export const aiEnabled = () => aiProvider() !== null;
-
-const ANTHROPIC_MODEL = "claude-opus-5-5";
-const openaiModel = () => process.env.OPENAI_MODEL || "gpt-5.5";
-let anthropic: Anthropic | null = null;
-let openai: OpenAI | null = null;
+export { aiEnabled, aiProvider } from "./llm.ts";
 
 export type Lang = "en" | "zh";
 export const parseLang = (v: unknown): Lang => (v === "zh" ? "zh" : "en");
 
 const LANGUAGE_RULE: Record<Lang, string> = {
   en: "Write every text field in British English.",
-  zh: "Write every text field in Simplified Chinese (简体中文), in the register of a quality Chinese sports column. Keep club names and three-letter club codes exactly as supplied (do not translate them). Use standard Chinese football terms (e.g. 预期进球, 零封, 主场优势).",
+  zh: "Write every text field in Simplified Chinese (简体中文), in the register of a quality Chinese sports column. Club and competition names are supplied in their standard Chinese form: use them exactly as supplied, and if a name is still in English keep it as supplied. Use standard Chinese football terms (e.g. 预期进球, 零封, 主场优势).",
 };
 
-export async function getAnalysis(d: MatchDetail, league: string, lang: Lang = "en"): Promise<AnalysisResult> {
+export async function getAnalysis(d: MatchDetail, league: League, lang: Lang = "en"): Promise<AnalysisResult> {
   const provider = aiProvider();
   const key = `${d.match.id}:${d.inputsHash}:${provider ?? "stat"}:${lang}`;
   if (cache[key]) return cache[key];
@@ -119,7 +105,7 @@ export async function getAnalysis(d: MatchDetail, league: string, lang: Lang = "
       let result: AnalysisResult;
       if (provider) {
         try {
-          result = provider === "openai" ? await openaiAnalysis(d, league, lang) : await claudeAnalysis(d, league, lang);
+          result = await aiAnalysis(d, league, lang);
         } catch (err) {
           console.error(`[analysis] ${provider} call failed, serving statistical summary:`, (err as Error).message);
           // not cached, so a later request can retry Claude
@@ -136,45 +122,14 @@ export async function getAnalysis(d: MatchDetail, league: string, lang: Lang = "
   return inflight.get(key)!;
 }
 
-async function claudeAnalysis(d: MatchDetail, league: string, lang: Lang): Promise<AnalysisResult> {
-  anthropic ??= new Anthropic();
-  const response = await anthropic.beta.messages.parse({
-    model: ANTHROPIC_MODEL,
-    max_tokens: 16000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default", // a safety-classifier decline is retried server-side on Anthropic's recommended model
-    output_config: { effort: "medium", format: betaZodOutputFormat(AnalysisSchema) },
-    system: SYSTEM, // kept byte-stable for prompt caching; the language rule goes in the user turn
-    messages: [{
-      role: "user",
-      content: userPrompt(d, league, lang),
-    }],
+async function aiAnalysis(d: MatchDetail, league: League, lang: Lang): Promise<AnalysisResult> {
+  const { parsed, model, provider } = await generateStructured(AnalysisSchema, {
+    name: "match_analysis",
+    system: SYSTEM,
+    user: `${LANGUAGE_RULE[lang]}\n\nWrite the preview for this fixture. Data:\n\n${JSON.stringify(briefing(d, league, lang), null, 2)}`,
+    effort: "medium",
   });
-  if (response.stop_reason === "refusal") throw new Error("model declined the request");
-  if (response.stop_reason === "max_tokens") throw new Error("analysis truncated");
-  const parsed = response.parsed_output;
-  if (!parsed) throw new Error("no structured output returned");
-  return { source: "claude", model: response.model, generatedAt: new Date().toISOString(), analysis: parsed };
-}
-
-function userPrompt(d: MatchDetail, league: string, lang: Lang) {
-  return `${LANGUAGE_RULE[lang]}\n\nWrite the preview for this fixture. Data:\n\n${JSON.stringify(briefing(d, league), null, 2)}`;
-}
-
-async function openaiAnalysis(d: MatchDetail, league: string, lang: Lang): Promise<AnalysisResult> {
-  openai ??= new OpenAI();
-  const response = await openai.responses.parse({
-    model: openaiModel(),
-    instructions: SYSTEM,
-    input: userPrompt(d, league, lang),
-    text: { format: zodTextFormat(AnalysisSchema, "match_analysis") },
-  });
-  if (response.status === "incomplete") throw new Error(`analysis incomplete (${response.incomplete_details?.reason ?? "unknown"})`);
-  const refused = response.output.some((o) => o.type === "message" && o.content.some((c) => c.type === "refusal"));
-  if (refused) throw new Error("model declined the request");
-  const parsed = response.output_parsed;
-  if (!parsed) throw new Error("no structured output returned");
-  return { source: "openai", model: response.model, generatedAt: new Date().toISOString(), analysis: parsed };
+  return { source: provider === "openai" ? "openai" : "claude", model, generatedAt: new Date().toISOString(), analysis: parsed };
 }
 
 const pc = (x: number, d = 0) => `${(x * 100).toFixed(d)}%`;
@@ -235,6 +190,7 @@ const COPY = {
 /** Deterministic, template-based summary used when no Claude credentials are configured. */
 export function statisticalAnalysis(d: MatchDetail, lang: Lang = "en"): AnalysisResult {
   const c = COPY[lang];
+  const n = namer(lang);
   const p = d.prediction, H = d.home, A = d.away;
   const fav = p.pick === "home" ? H : p.pick === "away" ? A : null;
   const totalXg = p.lambdaHome + p.lambdaAway;
@@ -242,20 +198,20 @@ export function statisticalAnalysis(d: MatchDetail, lang: Lang = "en"): Analysis
   const xgGap = p.lambdaHome - p.lambdaAway;
   factors.push({
     title: c.xgTitle,
-    detail: c.xg(H.team.short, p.lambdaHome.toFixed(2), A.team.short, p.lambdaAway.toFixed(2)),
+    detail: c.xg(n.code(H.team), p.lambdaHome.toFixed(2), n.code(A.team), p.lambdaAway.toFixed(2)),
     favours: Math.abs(xgGap) < 0.15 ? "neutral" : xgGap > 0 ? "home" : "away",
     weight: Math.abs(xgGap) > 0.6 ? "high" : "medium",
   });
   const formGap = H.formPoints - A.formPoints;
   factors.push({
     title: c.formTitle,
-    detail: c.form(H.team.short, H.formPoints, A.team.short, A.formPoints),
+    detail: c.form(n.code(H.team), H.formPoints, n.code(A.team), A.formPoints),
     favours: Math.abs(formGap) < 2 ? "neutral" : formGap > 0 ? "home" : "away",
     weight: Math.abs(formGap) >= 5 ? "high" : "medium",
   });
   factors.push({
     title: c.avdTitle,
-    detail: c.avd(H.team.short, H.attackRank, H.attackRating.toFixed(2), A.team.short, A.defenseRank, A.defenseRating.toFixed(2)),
+    detail: c.avd(n.code(H.team), H.attackRank, H.attackRating.toFixed(2), n.code(A.team), A.defenseRank, A.defenseRating.toFixed(2)),
     favours: H.attackRank < A.defenseRank ? "home" : "away",
     weight: "medium",
   });
@@ -267,7 +223,7 @@ export function statisticalAnalysis(d: MatchDetail, lang: Lang = "en"): Analysis
     weight: Math.abs(eloGap) > 120 ? "high" : "low",
   });
   const best = [
-    { market: fav ? c.win(fav.team.name) : c.draw, p: Math.max(p.pHome, p.pDraw, p.pAway) },
+    { market: fav ? c.win(n.name(fav.team)) : c.draw, p: Math.max(p.pHome, p.pDraw, p.pAway) },
     { market: p.over25 > 0.5 ? c.over : c.under, p: Math.max(p.over25, 1 - p.over25) },
     { market: p.btts > 0.5 ? c.btts : c.noBtts, p: Math.max(p.btts, 1 - p.btts) },
   ].sort((x, y) => y.p - x.p)[0];
@@ -277,11 +233,11 @@ export function statisticalAnalysis(d: MatchDetail, lang: Lang = "en"): Analysis
     source: "statistical",
     generatedAt: new Date().toISOString(),
     analysis: {
-      headline: fav ? c.headlineFav(fav.team.name) : c.headlineEven,
-      verdict: fav ? c.verdictFav(fav.team.name, pc(Math.max(p.pHome, p.pAway)), c.conf[p.confidenceLabel]) : c.verdictDraw(pc(p.pDraw)),
+      headline: fav ? c.headlineFav(n.name(fav.team)) : c.headlineEven,
+      verdict: fav ? c.verdictFav(n.name(fav.team), pc(Math.max(p.pHome, p.pAway)), c.conf[p.confidenceLabel]) : c.verdictDraw(pc(p.pDraw)),
       summary: c.summary(totalXg.toFixed(1), c.shape(totalXg), `${top.home}-${top.away}`, pc(top.p, 1)),
       keyFactors: factors,
-      matchScript: c.script(p.lambdaHome >= p.lambdaAway ? H.team.short : A.team.short, pc(p.btts)),
+      matchScript: c.script(p.lambdaHome >= p.lambdaAway ? n.code(H.team) : n.code(A.team), pc(p.btts)),
       risks: [c.risk1(pc(Math.min(p.pHome, p.pAway))), c.risk2(pc(p.pDraw)), c.risk3],
       bestAngle: { market: best.market, rationale: c.rationale(pc(best.p)) },
     },

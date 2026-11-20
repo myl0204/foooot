@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import path from "node:path";
 import fs from "node:fs";
-import { getEngine, dataWarning } from "./data/index.ts";
+import { engineForMatch, getEngine, getState } from "./data/index.ts";
 import { aiEnabled, aiProvider, getAnalysis, parseLang } from "./ai/analysis.ts";
 import type { Engine } from "./engine/predict.ts";
 import type { Match } from "./types.ts";
@@ -13,7 +13,7 @@ app.use(express.json());
 const summary = (engine: Engine, m: Match) => {
   const p = engine.predict(m);
   return {
-    id: m.id, date: m.date, matchday: m.matchday, status: m.status,
+    id: m.id, date: m.date, matchday: m.matchday, round: m.round, status: m.status,
     homeGoals: m.homeGoals, awayGoals: m.awayGoals,
     home: engine.team(m.homeId), away: engine.team(m.awayId),
     prediction: {
@@ -33,47 +33,60 @@ const route = (fn: (req: express.Request, res: express.Response) => Promise<unkn
   };
 
 app.get("/api/meta", route(async (_req, res) => {
-  const e = await getEngine();
+  const s = await getState();
   res.json({
-    league: e.data.league, dataSource: e.data.source, aiEnabled: aiEnabled(), aiProvider: aiProvider(), warning: dataWarning(),
-    teams: e.data.teams.length, played: e.finished().length, upcoming: e.upcoming().length,
+    dataSource: s.source, aiEnabled: aiEnabled(), aiProvider: aiProvider(),
+    warning: s.warnings.length ? s.warnings.join(" · ") : undefined,
+    leagues: s.engines.map((e) => ({
+      ...e.data.league, teams: e.standings.length, played: e.trainedOn, upcoming: e.upcoming().length, seasons: e.seasons,
+    })),
   });
 }));
 
 app.get("/api/fixtures", route(async (req, res) => {
-  const e = await getEngine();
+  const e = await getEngine(req.query.league);
   const limit = Math.min(Number(req.query.limit) || 24, 100);
   res.json(e.upcoming().slice(0, limit).map((m) => summary(e, m)));
 }));
 
 app.get("/api/results", route(async (req, res) => {
-  const e = await getEngine();
+  const e = await getEngine(req.query.league);
   const limit = Math.min(Number(req.query.limit) || 16, 100);
   res.json(e.finished().slice(0, limit).map((m) => summary(e, m)));
 }));
 
-app.get("/api/standings", route(async (_req, res) => {
-  const e = await getEngine();
+app.get("/api/standings", route(async (req, res) => {
+  const e = await getEngine(req.query.league);
   res.json(e.standings);
 }));
 
-app.get("/api/model", route(async (_req, res) => {
-  const e = await getEngine();
+app.get("/api/model", route(async (req, res) => {
+  const e = await getEngine(req.query.league);
   res.json({ homeAdvantage: Math.exp(e.ratings.homeAdv), backtest: e.backtest() });
 }));
 
+/** Match context: teams, form, table, head-to-head. The forecast itself comes from POST …/prediction. */
 app.get("/api/matches/:id", route(async (req, res) => {
-  const e = await getEngine();
-  const d = e.detail(String(req.params.id));
-  if (!d) return void res.status(404).json({ error: "not_found" });
-  res.json({ ...d, homeTeam: d.home.team, awayTeam: d.away.team, league: e.data.league });
+  const e = await engineForMatch(String(req.params.id));
+  const d = e?.detail(String(req.params.id));
+  if (!e || !d) return void res.status(404).json({ error: "not_found" });
+  const { prediction: _p, elo: _e, inputsHash: _h, ...context } = d;
+  res.json({ ...context, league: e.data.league });
+}));
+
+/** Run the model for one match (the UI's "start prediction"). */
+app.post("/api/matches/:id/prediction", route(async (req, res) => {
+  const e = await engineForMatch(String(req.params.id));
+  const d = e?.detail(String(req.params.id));
+  if (!e || !d) return void res.status(404).json({ error: "not_found" });
+  res.json({ prediction: d.prediction, elo: d.elo, trainedOn: d.trainedOn });
 }));
 
 app.post("/api/matches/:id/analysis", route(async (req, res) => {
-  const e = await getEngine();
-  const d = e.detail(String(req.params.id));
-  if (!d) return void res.status(404).json({ error: "not_found" });
-  res.json(await getAnalysis(d, e.data.league.name, parseLang(req.query.lang)));
+  const e = await engineForMatch(String(req.params.id));
+  const d = e?.detail(String(req.params.id));
+  if (!e || !d) return void res.status(404).json({ error: "not_found" });
+  res.json(await getAnalysis(d, e.data.league, parseLang(req.query.lang)));
 }));
 
 // Serve the built frontend in production

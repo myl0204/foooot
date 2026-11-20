@@ -305,7 +305,7 @@ code { font-family: var(--mono); font-size: 0.85em; color: var(--gold-2); }
 .grid-wrap { display: grid; gap: 8px; }
 .grid-axis-x { text-align: center; font-size: 11px; letter-spacing: .1em; color: var(--muted); padding-left: 48px; }
 .grid-body { display: grid; grid-template-columns: 18px 1fr; gap: 6px; }
-.grid-axis-y { writing-mode: vertical-rl; transform: rotate(180deg); text-align: center; font-size: 11px; letter-spacing: .1em; color: var(--muted); }
+.grid-axis-y { writing-mode: vertical-rl; text-orientation: sideways; text-align: center; font-size: 11px; letter-spacing: .1em; color: var(--muted); }
 .scoregrid { display: grid; gap: 2px; }
 .sg-head { font-family: var(--mono); font-size: 11px; color: var(--muted); display: grid; place-items: center; height: 22px; }
 .sg-cell { aspect-ratio: 1; border: 0; border-radius: 4px; font-family: var(--mono); font-size: 11px; cursor: default; transition: transform .15s, box-shadow .15s; }
@@ -387,6 +387,67 @@ code { font-family: var(--mono); font-size: 0.85em; color: var(--gold-2); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; max-width: 1240px; margin: 0 auto; padding: 28px clamp(16px, 4vw, 48px) 40px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
 
+/* ---------- competition switcher ---------- */
+.leagues-wrap { max-width: 1240px; margin: 0 auto; padding: 14px clamp(16px, 4vw, 48px) 0; }
+.leagues { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px; mask-image: linear-gradient(90deg, #000 92%, transparent); }
+.leagues::-webkit-scrollbar { display: none; }
+.leagues button {
+  flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); font-size: 13px; color: var(--ink-2); white-space: nowrap;
+  transition: color .2s, border-color .2s, background .2s;
+}
+.leagues button:not(:has(.league-logo)) { padding-left: 14px; }
+.leagues button:hover { color: var(--ink); border-color: var(--line-2); }
+.leagues button.on { color: var(--ink); border-color: rgba(217, 184, 112, .55); background: rgba(217, 184, 112, .1); box-shadow: 0 0 18px -6px rgba(217, 184, 112, .5); }
+.leagues button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.league-logo { width: 22px; height: 22px; border-radius: 50%; background: rgba(255, 255, 255, .92); display: grid; place-items: center; overflow: hidden; }
+.league-logo img { width: 16px; height: 16px; object-fit: contain; }
+.loading.short { min-height: 0; padding: 48px 16px; text-align: center; border: 1px dashed var(--line-2); border-radius: var(--radius); }
+
+/* ---------- start prediction ---------- */
+.start { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.start-stage { position: relative; width: 230px; height: 230px; display: grid; place-items: center; }
+.start-stage::before { content: ""; position: absolute; inset: 11px; border-radius: 50%; border: 10px solid var(--line); }
+.start-orbit {
+  position: absolute; inset: 0; border-radius: 50%; border: 1px dashed rgba(217, 184, 112, .4);
+  animation: spin 30s linear infinite;
+}
+.start-btn {
+  position: relative; width: 148px; height: 148px; border-radius: 50%; border: 0; cursor: pointer; padding: 0 18px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  font-weight: 600; font-size: 14.5px; line-height: 1.25; color: #17120a;
+  background: radial-gradient(circle at 50% 30%, var(--gold-2), var(--gold) 58%, #a5813d);
+  box-shadow: 0 0 0 8px rgba(217, 184, 112, .08), 0 22px 50px -14px rgba(217, 184, 112, .65), inset 0 1px 0 rgba(255, 255, 255, .6);
+  animation: breathe 2.8s ease-in-out infinite; transition: transform .25s cubic-bezier(.2, .7, .2, 1);
+}
+.start-btn:hover { transform: scale(1.04); }
+.start-btn:active { transform: scale(.97); }
+.start-btn:focus-visible { outline: 2px solid var(--gold-2); outline-offset: 6px; }
+@keyframes breathe { 50% { box-shadow: 0 0 0 18px rgba(217, 184, 112, .03), 0 22px 50px -14px rgba(217, 184, 112, .65), inset 0 1px 0 rgba(255, 255, 255, .6); } }
+.start-note { font-size: 12.5px; color: var(--muted); }
+.start-err { font-size: 12.5px; color: var(--bad); max-width: 260px; text-align: center; }
+
+/* ---------- calculating ---------- */
+.calc { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.orbit { transform-origin: 100px 100px; animation: spin 1.5s cubic-bezier(.55, .15, .45, .85) infinite; }
+.orbit.o2 { animation-duration: 2.3s; animation-direction: reverse; }
+.orbit.o3 { animation-duration: 3.1s; }
+.calc-n { font-size: 30px; color: var(--gold-2); line-height: 1; }
+.calc-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-width: 280px; font-size: 13px; color: var(--muted); }
+.calc-steps li { display: flex; align-items: center; gap: 10px; transition: color .3s; }
+.calc-steps li.on { color: var(--ink); }
+.calc-steps li.done { color: var(--ink-2); }
+.step-dot {
+  flex: none; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--line-2);
+  display: grid; place-items: center; font-size: 9px; font-weight: 700; color: #17120a;
+}
+.calc-steps li.on .step-dot { border-color: var(--gold); border-right-color: transparent; animation: spin .8s linear infinite; }
+.calc-steps li.done .step-dot { background: var(--gold); border-color: var(--gold); }
+.calc-quick { width: 230px; height: 230px; display: grid; place-items: center; }
+.reveal { display: flex; flex-direction: column; align-items: center; gap: 14px; animation: reveal .7s cubic-bezier(.2, .7, .2, 1) both; }
+.xg-duel.reveal { display: grid; }
+@keyframes reveal { from { opacity: 0; transform: scale(.94); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1080px) {
   .two-col, .two-col.even { grid-template-columns: 1fr; }
@@ -431,6 +492,7 @@ code { font-family: var(--mono); font-size: 0.85em; color: var(--gold-2); }
 :lang(zh) .ft-label, :lang(zh) .xg-label, :lang(zh) .duel-label, :lang(zh) .thead, :lang(zh) .weight,
 :lang(zh) .analysis-src, :lang(zh) .analysis-split h5, :lang(zh) .angle-k, :lang(zh) .conf span,
 :lang(zh) .r-verdict, :lang(zh) .hero-team .muted { letter-spacing: 0.06em; }
+:lang(zh) .start-btn { font-size: 16px; letter-spacing: 0.08em; }
 :lang(zh) .display, :lang(zh) .section-head h3, :lang(zh) .analysis-h, :lang(zh) .angle-m,
 :lang(zh) .ring-pick, :lang(zh) .stat-v { font-family: "Instrument Serif", "Noto Serif SC", "Songti SC", serif; font-weight: 500; }
 :lang(zh) .display { letter-spacing: 0; line-height: 1.15; }

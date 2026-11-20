@@ -2,6 +2,7 @@ export interface Team {
   id: string;
   name: string;
   short: string; // 3-letter code
+  nameZh?: string; // Chinese display name, filled in by data/names.ts
   city?: string;
   colors: [string, string];
   crest?: string; // URL, live data only
@@ -10,7 +11,9 @@ export interface Team {
 export interface Match {
   id: string;
   date: string; // ISO
-  matchday: number;
+  season: string; // provider season id, e.g. "2026"
+  matchday: number; // 0 when the round has no number (cup knockouts)
+  round?: string; // provider round name; with season, groups a matchday (e.g. "Apertura - 5")
   homeId: string;
   awayId: string;
   status: "finished" | "scheduled";
@@ -18,9 +21,22 @@ export interface Match {
   awayGoals?: number;
 }
 
+export type DataSource = "demo" | "football-data.org" | "api-football";
+
+export interface League {
+  id: string;
+  name: string;
+  nameZh?: string;
+  country?: string;
+  season: string; // current season id (matches Match.season)
+  seasonLabel: string; // "2026/27" or "2026"
+  logo?: string;
+}
+
+/** One league: every team and match the provider returned, across all loaded seasons. */
 export interface Dataset {
-  source: "demo" | "football-data.org";
-  league: { name: string; season: string; country?: string };
+  source: DataSource;
+  league: League;
   teams: Team[];
   matches: Match[];
 }
@@ -51,7 +67,8 @@ export interface FormEntry {
   result: "W" | "D" | "L";
   gf: number;
   ga: number;
-  opponent: string;
+  opponent: string; // 3-letter code
+  opponentZh?: string;
   venue: "H" | "A";
 }
 
@@ -81,4 +98,5 @@ export interface MatchDetail {
   elo: { home: number; away: number; pHomeWinish: number };
   headToHead: Match[];
   inputsHash: string;
+  trainedOn: number; // finished matches the model had seen before this one
 }

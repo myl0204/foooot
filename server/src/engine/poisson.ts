@@ -18,67 +18,58 @@ export function poissonPmf(k: number, lambda: number): number {
  * via weighted iterative proportional fitting with shrinkage.
  */
 export function fitRatings(teamIds: string[], matches: Match[], asOf: Date): Ratings {
-  const played = matches.filter((m) => m.status === "finished" && m.homeGoals != null);
-  const w = (m: Match) => {
-    const ageDays = (asOf.getTime() - new Date(m.date).getTime()) / 86_400_000;
-    return Math.pow(0.5, Math.max(0, ageDays) / HALF_LIFE_DAYS);
-  };
-
+  const index = new Map(teamIds.map((id, i) => [id, i]));
+  const played = matches.filter((m) => m.status === "finished" && m.homeGoals != null && index.has(m.homeId) && index.has(m.awayId));
+  // Precompute per-match weight and team indices: the fit loops over these 60 times.
+  const n = played.length, T = teamIds.length;
+  const wt = new Float64Array(n), hi = new Int32Array(n), ai = new Int32Array(n), hg = new Float64Array(n), ag = new Float64Array(n);
   let totW = 0, homeG = 0, awayG = 0;
-  for (const m of played) {
-    const wt = w(m);
-    totW += wt;
-    homeG += wt * m.homeGoals!;
-    awayG += wt * m.awayGoals!;
-  }
+  played.forEach((m, i) => {
+    const ageDays = (asOf.getTime() - new Date(m.date).getTime()) / 86_400_000;
+    wt[i] = Math.pow(0.5, Math.max(0, ageDays) / HALF_LIFE_DAYS);
+    hi[i] = index.get(m.homeId)!; ai[i] = index.get(m.awayId)!;
+    hg[i] = m.homeGoals!; ag[i] = m.awayGoals!;
+    totW += wt[i]; homeG += wt[i] * hg[i]; awayG += wt[i] * ag[i];
+  });
   const avgHome = totW ? homeG / totW : 1.5;
   const avgAway = totW ? awayG / totW : 1.15;
   const base = Math.log(Math.max(avgAway, 0.3));
   const homeAdv = Math.log(Math.max(avgHome, 0.3) / Math.max(avgAway, 0.3));
 
-  const att: Record<string, number> = {};
-  const def: Record<string, number> = {};
-  for (const id of teamIds) { att[id] = 1; def[id] = 1; }
+  let att: Float64Array = new Float64Array(T).fill(1);
+  let def: Float64Array = new Float64Array(T).fill(1);
   const H = Math.exp(homeAdv), B = Math.exp(base);
+  const got = new Float64Array(T), exp = new Float64Array(T);
 
   for (let iter = 0; iter < 60; iter++) {
-    // attack update
-    const nextAtt: Record<string, number> = {};
-    for (const id of teamIds) {
-      let scored = PRIOR, expected = PRIOR;
-      for (const m of played) {
-        const wt = w(m);
-        if (m.homeId === id) { scored += wt * m.homeGoals!; expected += wt * B * H * def[m.awayId]; }
-        else if (m.awayId === id) { scored += wt * m.awayGoals!; expected += wt * B * def[m.homeId]; }
-      }
-      nextAtt[id] = scored / expected;
+    // attack update: goals scored vs expected given opponents' defence
+    got.fill(PRIOR); exp.fill(PRIOR);
+    for (let i = 0; i < n; i++) {
+      const w = wt[i], h = hi[i], a = ai[i];
+      got[h] += w * hg[i]; exp[h] += w * B * H * def[a];
+      got[a] += w * ag[i]; exp[a] += w * B * def[h];
     }
-    // normalise attacks to geometric mean 1
-    normalise(nextAtt);
-    const nextDef: Record<string, number> = {};
-    for (const id of teamIds) {
-      let conceded = PRIOR, expected = PRIOR;
-      for (const m of played) {
-        const wt = w(m);
-        if (m.homeId === id) { conceded += wt * m.awayGoals!; expected += wt * B * nextAtt[m.awayId]; }
-        else if (m.awayId === id) { conceded += wt * m.homeGoals!; expected += wt * B * H * nextAtt[m.homeId]; }
-      }
-      nextDef[id] = conceded / expected;
+    const nextAtt = normalise(got.map((g, t) => g / exp[t]));
+    // defence update: goals conceded vs expected given opponents' (new) attack
+    got.fill(PRIOR); exp.fill(PRIOR);
+    for (let i = 0; i < n; i++) {
+      const w = wt[i], h = hi[i], a = ai[i];
+      got[h] += w * ag[i]; exp[h] += w * B * nextAtt[a];
+      got[a] += w * hg[i]; exp[a] += w * B * H * nextAtt[h];
     }
-    normalise(nextDef);
-    Object.assign(att, nextAtt);
-    Object.assign(def, nextDef);
+    def = normalise(got.map((g, t) => g / exp[t]));
+    att = nextAtt;
   }
 
-  const toLog = (r: Record<string, number>) =>
-    Object.fromEntries(Object.entries(r).map(([k, v]) => [k, Math.log(v)]));
+  const toLog = (r: Float64Array) => Object.fromEntries(teamIds.map((id, i) => [id, Math.log(r[i])]));
   return { attack: toLog(att), defense: toLog(def), homeAdv, base };
 }
 
-function normalise(r: Record<string, number>) {
-  const ids = Object.keys(r);
-  const g = Math.exp(ids.reduce((s, id) => s + Math.log(r[id]), 0) / ids.length);
-  for (const id of ids) r[id] /= g;
+/** Scale to geometric mean 1, in place. */
+function normalise(r: Float64Array): Float64Array {
+  const g = Math.exp(r.reduce((s, x) => s + Math.log(x), 0) / r.length);
+  for (let i = 0; i < r.length; i++) r[i] /= g;
+  return r;
 }
 
 export function expectedGoals(r: Ratings, homeId: string, awayId: string, neutral = false) {

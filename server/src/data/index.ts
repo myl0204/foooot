@@ -1,37 +1,115 @@
-import type { Dataset } from "../types.ts";
+import type { Dataset, DataSource } from "../types.ts";
 import { Engine } from "../engine/predict.ts";
 import { buildDemoDataset } from "./demo.ts";
 import { fetchFootballData } from "./footballData.ts";
+import { DEFAULT_LEAGUES, fetchApiFootball } from "./apiFootball.ts";
+import { applyChineseNames } from "./names.ts";
+import { toInt } from "./http.ts";
 
-const TTL_MS = 30 * 60 * 1000;
-let current: { engine: Engine; loadedAt: number; warning?: string } | null = null;
-let loading: Promise<Engine> | null = null;
-
-async function loadDataset(): Promise<{ data: Dataset; warning?: string }> {
-  const key = process.env.FOOTBALL_DATA_API_KEY;
-  if (key) {
-    try {
-      const data = await fetchFootballData(key, process.env.FOOTBALL_DATA_COMPETITION || "PL");
-      if (data.matches.some((m) => m.status === "finished")) return { data };
-      throw new Error("no finished matches returned");
-    } catch (err) {
-      console.error("[data] live provider failed, using demo league:", (err as Error).message);
-      return { data: buildDemoDataset(), warning: "Live data unavailable — showing demo league." };
-    }
-  }
-  return { data: buildDemoDataset() };
+/** What a live provider returns: one dataset per league. */
+export interface LoadResult {
+  datasets: Dataset[];
+  warnings: string[];
+  pendingHistory: boolean; // past seasons not on disk yet; fetch them in the background
 }
 
-export async function getEngine(): Promise<Engine> {
-  if (current && Date.now() - current.loadedAt < TTL_MS) return current.engine;
-  loading ??= loadDataset()
-    .then(({ data, warning }) => {
-      const engine = new Engine(data);
-      current = { engine, loadedAt: Date.now(), warning };
-      return engine;
+export interface DataState {
+  source: DataSource;
+  engines: Engine[]; // one per league, in configured order
+  loadedAt: number;
+  warnings: string[];
+}
+
+const TTL_MS = 30 * 60 * 1000;
+let state: DataState | null = null;
+let loading: Promise<DataState> | null = null;
+let backfilling = false;
+
+/** Provider precedence: API-Football, then football-data.org, then the demo league. */
+function liveProvider(): { source: DataSource; load: (fetchHistory: boolean) => Promise<LoadResult> } | null {
+  const history = toInt(process.env.HISTORY_SEASONS, 2, 0, 10);
+  const afKey = process.env.API_FOOTBALL_KEY;
+  if (afKey) {
+    const ids = (process.env.API_FOOTBALL_LEAGUES ?? "").split(",").map((s) => Number.parseInt(s.trim(), 10)).filter((n) => n > 0);
+    return {
+      source: "api-football",
+      load: (fetchHistory) => fetchApiFootball({
+        key: afKey, leagues: ids.length ? ids : DEFAULT_LEAGUES, history, fetchHistory,
+        refreshMinutes: toInt(process.env.API_FOOTBALL_REFRESH_MINUTES, 60, 5, 24 * 60),
+      }),
+    };
+  }
+  const fdKey = process.env.FOOTBALL_DATA_API_KEY;
+  if (fdKey) {
+    const competitions = (process.env.FOOTBALL_DATA_COMPETITION || "PL").split(",").map((s) => s.trim()).filter(Boolean);
+    return {
+      source: "football-data.org",
+      load: (fetchHistory) => fetchFootballData({ key: fdKey, competitions, history: Math.min(history, 3), fetchHistory, refreshMinutes: 30 }),
+    };
+  }
+  return null;
+}
+
+function makeState(source: DataSource, datasets: Dataset[], warnings: string[]): DataState {
+  applyChineseNames(datasets);
+  return { source, engines: datasets.map((d) => new Engine(d)), loadedAt: Date.now(), warnings };
+}
+
+async function build(fetchHistory: boolean): Promise<{ next: DataState; pendingHistory: boolean }> {
+  const live = liveProvider();
+  if (!live) return { next: makeState("demo", [buildDemoDataset()], []), pendingHistory: false };
+  try {
+    const r = await live.load(fetchHistory);
+    for (const w of r.warnings) console.warn(`[data] ${w}`);
+    const usable = r.datasets.filter((d) => d.matches.some((m) => m.status === "finished"));
+    if (!usable.length) throw new Error(r.warnings[0] ?? "no finished matches returned");
+    const counts = usable.map((d) => `${d.league.name} ${d.matches.filter((m) => m.status === "finished").length}`).join(", ");
+    console.log(`[data] ${live.source}: ${counts}`);
+    return { next: makeState(live.source, usable, r.warnings), pendingHistory: r.pendingHistory };
+  } catch (err) {
+    console.error("[data] live provider failed, using demo league:", (err as Error).message);
+    return { next: makeState("demo", [buildDemoDataset()], [`Live data unavailable (${(err as Error).message}) — showing demo league.`]), pendingHistory: false };
+  }
+}
+
+function reload(): Promise<DataState> {
+  loading ??= build(false)
+    .then(({ next, pendingHistory }) => {
+      // A failed refresh must not replace good live data with the demo league.
+      if (!(next.source === "demo" && state && state.source !== "demo")) state = next;
+      if (pendingHistory) backfill();
+      return state ?? next;
     })
     .finally(() => (loading = null));
   return loading;
 }
 
-export const dataWarning = () => current?.warning;
+/** Past seasons can take minutes on a rate-limited plan: serve the current season meanwhile. */
+function backfill() {
+  if (backfilling) return;
+  backfilling = true;
+  console.log("[data] loading past seasons in the background…");
+  build(true)
+    .then(({ next }) => { if (next.source !== "demo") state = next; })
+    .catch((err) => console.error("[data] backfill failed:", (err as Error).message))
+    .finally(() => (backfilling = false));
+}
+
+/** Current data. After the first load, stale data is served while a refresh runs. */
+export async function getState(): Promise<DataState> {
+  if (!state) return reload();
+  if (Date.now() - state.loadedAt >= TTL_MS) void reload().catch((err) => console.error("[data] refresh failed:", err));
+  return state;
+}
+
+/** The engine for a league id; unknown or missing ids get the first league. */
+export async function getEngine(leagueId?: unknown): Promise<Engine> {
+  const s = await getState();
+  return s.engines.find((e) => e.data.league.id === leagueId) ?? s.engines[0];
+}
+
+/** The engine whose league contains this match. */
+export async function engineForMatch(matchId: string): Promise<Engine | null> {
+  const s = await getState();
+  return s.engines.find((e) => e.match(matchId)) ?? null;
+}
