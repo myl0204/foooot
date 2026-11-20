@@ -4,6 +4,7 @@ import { api, kickoff, pct, providerName, useApi, type Analysis, type Detail, ty
 import { Crest } from "../components/Crest";
 import { ConfidenceDots, DuelRow, FormPills, OutcomeRing, ScoreGrid } from "../components/Charts";
 import { ordinal, useI18n, useNames, useRoundLabel, type Lang } from "../i18n";
+import { OracleFx, type FxMode } from "../fx/oracle";
 import { useLeague } from "../league";
 import { Empty, Loading } from "./Fixtures";
 
@@ -27,10 +28,28 @@ export function MatchPage({ meta }: { meta?: Meta }) {
   const { league, setLeague } = useLeague();
   const { data: d, loading, error } = useApi<Detail>(`/matches/${id}`);
   const run = usePrediction(id, lang);
+  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
+  const fx = useOracleFx(canvas);
 
   // Opening a match from another competition switches the league bar to it.
   const matchLeague = d?.league.id;
   useEffect(() => { if (matchLeague && matchLeague !== league?.id) setLeague(matchLeague); }, [matchLeague]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Drive the canvas show from the run (effect order matters: teams and matrix before mode).
+  useEffect(() => {
+    if (!fx || !d) return;
+    const recent = (f: FormEntry[]) => f.map((x) => `${x.gf}–${x.ga}`);
+    fx.setTeams({
+      homeColor: d.home.team.colors[0], awayColor: d.away.team.colors[0],
+      homeLabel: names.short(d.home.team), awayLabel: names.short(d.away.team),
+      homeGlyphs: recent(d.home.form), awayGlyphs: recent(d.away.form),
+    });
+  }, [fx, d, names]);
+  useEffect(() => { fx?.setMatrix(run.result?.prediction.matrix ?? null); }, [fx, run.result]);
+  const fxMode: FxMode = run.instant ? "off"
+    : run.phase === "running" ? FX_STEPS[Math.min(run.step, 3)]
+    : run.phase === "done" ? "afterglow" : "idle";
+  useEffect(() => { fx?.setMode(fxMode); }, [fx, fxMode]);
 
   if (loading) return <Loading />;
   if (error || !d) return <Empty msg={error ?? t("common.notFound")} />;
@@ -44,20 +63,22 @@ export function MatchPage({ meta }: { meta?: Meta }) {
   const r = run.phase === "done" ? run.result : null;
   const p = r?.prediction;
   const aiLabel = meta?.aiEnabled ? t("m.calc.ai", { provider: providerName(meta.aiProvider) }) : t("m.calc.stat");
+  const computing = run.phase === "running" && !run.instant;
 
   return (
     <div className="stack-xl">
       <Link to="/" className="back">{t("m.back")}</Link>
 
-      <section className="mhero rise" style={style}>
+      <section className={`mhero rise${computing ? " computing" : ""}`} style={style}>
         <div className="mhero-glow" aria-hidden="true" />
+        <div className="mhero-dark" aria-hidden="true" />
         <div className="eyebrow center">
           <span>{names.league(d.league)}</span><span className="dot" /><span>{roundLabel(d.match)}</span><span className="dot" />
           <span className="mono">{kickoff(d.match.date, locale)}</span>
         </div>
         <div className="mhero-grid">
           <TeamBlock p={H} side={t("common.home")} />
-          <div className="mhero-center">
+          <div className={`mhero-center${p ? "" : " tall"}`}>
             {finished && (
               <div className="ft">
                 <span className="ft-label">{t("m.fullTime")}</span>
@@ -65,7 +86,7 @@ export function MatchPage({ meta }: { meta?: Meta }) {
               </div>
             )}
             {p ? (
-              <div className="reveal">
+              <div className={`reveal${run.instant ? "" : " boom"}`}>
                 <OutcomeRing pHome={p.pHome} pDraw={p.pDraw} pAway={p.pAway} homeName={hs} awayName={as} center={
                   <>
                     <span className="ring-k">{finished ? t("m.pickWas") : t("m.pick")}</span>
@@ -83,9 +104,9 @@ export function MatchPage({ meta }: { meta?: Meta }) {
             ) : run.phase === "running" ? (
               run.instant
                 ? <div className="calc-quick"><span className="spinner" /></div>
-                : <Calculating step={run.step} trainedOn={d.trainedOn} aiLabel={aiLabel} />
+                : <Simulation fx={fx} step={run.step} trainedOn={d.trainedOn} result={run.result} hs={hs} as={as} aiLabel={aiLabel} />
             ) : (
-              <StartPanel finished={finished} trainedOn={d.trainedOn} error={run.error} onStart={() => void run.start()} />
+              <StartPanel finished={finished} trainedOn={d.trainedOn} error={run.error} onStart={() => void run.start()} onHover={(on) => fx?.setHover(on)} />
             )}
           </div>
           <TeamBlock p={A} side={t("common.away")} />
@@ -101,6 +122,7 @@ export function MatchPage({ meta }: { meta?: Meta }) {
             <span className="xg-label">{t("m.xg")}</span>
           </div>
         )}
+        <canvas ref={setCanvas} className="fx-canvas" aria-hidden="true" />
       </section>
 
       {r && p && (
@@ -200,24 +222,26 @@ function usePrediction(matchId: string, lang: Lang) {
     const live = () => runId.current === id;
     const hold = (ms: number) => (quick ? Promise.resolve() : sleep(ms));
     setPhase("running"); setInstant(quick); setStep(0); setError(null); setAnalysisErr(null);
+    // The written analysis is the slow part: ask for it at once, alongside the model run.
+    const l = langNow.current;
+    const analysis = api<Analysis>(`/matches/${matchId}/analysis?lang=${l}`, { method: "POST" })
+      .then((a) => ({ a }), (e: Error) => ({ err: e.message }));
+    const prediction = api<PredictionResult>(`/matches/${matchId}/prediction`, { method: "POST" });
+    prediction.catch(() => { /* handled when awaited */ });
     try {
-      await hold(900); // the match count animates up
+      await hold(1500); // data streams in, the match count runs up
       if (!live()) return;
       setStep(1);
-      const [res] = await Promise.all([api<PredictionResult>(`/matches/${matchId}/prediction`, { method: "POST" }), hold(1000)]);
+      const [res] = await Promise.all([prediction, hold(1500)]); // the vortex spins until the model is back
       if (!live()) return;
       setResult(res);
       setStep(2);
-      const l = langNow.current;
-      try {
-        const [a] = await Promise.all([api<Analysis>(`/matches/${matchId}/analysis?lang=${l}`, { method: "POST" }), hold(800)]);
-        if (live()) setAnalyses({ [l]: a });
-      } catch (e) {
-        if (live()) setAnalysisErr((e as Error).message); // the numbers still stand
-      }
+      const [out] = await Promise.all([analysis, hold(3200)]); // Monte Carlo runs until the analysis is in
       if (!live()) return;
+      if ("a" in out) setAnalyses({ [l]: out.a });
+      else setAnalysisErr(out.err); // the numbers still stand
       setStep(3);
-      await hold(400);
+      await hold(1100); // collapse and detonate
       if (!live()) return;
       markStarted(matchId);
       setPhase("done");
@@ -266,13 +290,17 @@ function useCountUp(target: number, ms: number) {
   return n;
 }
 
-function StartPanel({ finished, trainedOn, error, onStart }: { finished: boolean; trainedOn: number; error: string | null; onStart: () => void }) {
+function StartPanel({ finished, trainedOn, error, onStart, onHover }: {
+  finished: boolean; trainedOn: number; error: string | null; onStart: () => void; onHover: (on: boolean) => void;
+}) {
   const { t, locale } = useI18n();
   return (
     <div className="start">
-      <div className="start-stage">
+      <div className="start-stage" data-fx="core">
+        <span className="start-halo" aria-hidden="true" />
         <span className="start-orbit" aria-hidden="true" />
-        <button className="start-btn" onClick={onStart}>
+        <button className="start-btn" onClick={onStart}
+          onPointerEnter={() => onHover(true)} onPointerLeave={() => onHover(false)} onFocus={() => onHover(true)} onBlur={() => onHover(false)}>
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor" /></svg>
           <span>{finished ? t("m.startFinished") : t("m.start")}</span>
         </button>
@@ -283,33 +311,105 @@ function StartPanel({ finished, trainedOn, error, onStart }: { finished: boolean
   );
 }
 
-function Calculating({ step, trainedOn, aiLabel }: { step: number; trainedOn: number; aiLabel: string }) {
+const FX_STEPS = ["gather", "fit", "simulate", "finale"] as const;
+
+/** The canvas show; null when the user prefers reduced motion. */
+function useOracleFx(canvas: HTMLCanvasElement | null) {
+  const [fx, setFx] = useState<OracleFx | null>(null);
+  useEffect(() => {
+    const hero = canvas?.parentElement;
+    if (!canvas || !hero || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const e = new OracleFx(canvas, hero);
+    e.onImpact(() => {
+      const g = hero.querySelector<HTMLElement>(".mhero-grid");
+      if (!g) return;
+      g.classList.remove("impact");
+      void g.offsetWidth; // restart the animation
+      g.classList.add("impact");
+    });
+    setFx(e);
+    return () => { e.destroy(); setFx(null); };
+  }, [canvas]);
+  return fx;
+}
+
+/**
+ * Read-out for the run: a headline number per step (matches loaded, expected goals
+ * scrambling then locking, simulated matches), the live home/draw/away tally of the
+ * simulation, and progress through the three server steps.
+ */
+function Simulation({ fx, step, trainedOn, result, hs, as, aiLabel }: {
+  fx: OracleFx | null; step: number; trainedOn: number; result: PredictionResult | null; hs: string; as: string; aiLabel: string;
+}) {
   const { t, locale } = useI18n();
-  const n = useCountUp(trainedOn, 850);
-  const steps = [t("m.calc.data", { n: trainedOn.toLocaleString(locale) }), t("m.calc.model"), aiLabel];
-  const captions = [t("m.calc.k.data"), t("m.calc.k.model"), t("m.calc.k.ai")];
+  const matches = useCountUp(trainedOn, 1300);
+  const [scramble, setScramble] = useState("0.00 – 0.00");
+  const [showSims, setShowSims] = useState(false);
+  const simsRef = useRef<HTMLSpanElement>(null);
+  const tally = useRef<(HTMLElement | null)[]>([]);
+  const bars = useRef<(HTMLElement | null)[]>([]);
+  const simulating = step >= 2;
+
+  useEffect(() => {
+    if (step !== 1) return;
+    const n = () => (Math.random() * 3.4).toFixed(2);
+    const id = setInterval(() => setScramble(`${n()} – ${n()}`), 55);
+    return () => clearInterval(id);
+  }, [step]);
+
+  // Expected goals lock in first; then the counter of simulated matches takes over.
+  useEffect(() => {
+    if (!simulating || !fx) return;
+    const id = setTimeout(() => setShowSims(true), 1000);
+    return () => clearTimeout(id);
+  }, [simulating, fx]);
+
+  // Written straight to the DOM: the engine reports ~20 times a second.
+  useEffect(() => fx?.onStats((s) => {
+    if (simsRef.current) simsRef.current.textContent = s.sims.toLocaleString(locale);
+    [s.home, s.draw, s.away].forEach((v, i) => {
+      const label = tally.current[i], bar = bars.current[i];
+      if (label) label.textContent = pct(v, 1);
+      if (bar) bar.style.flexGrow = String(v);
+    });
+  }), [fx, locale]);
+
+  const p = result?.prediction;
+  const hud = step === 0 ? { v: matches.toLocaleString(locale), k: t("m.calc.k.data"), cls: "" }
+    : step === 1 || !p ? { v: scramble, k: t("m.calc.k.fit"), cls: " scramble" }
+    : !showSims ? { v: `${p.lambdaHome.toFixed(2)} – ${p.lambdaAway.toFixed(2)}`, k: t("m.calc.k.xg"), cls: " locked" }
+    : null;
+  // Without the canvas (reduced motion) the tally shows the model's own probabilities.
+  const fallback = !fx && p ? [p.pHome, p.pDraw, p.pAway] : null;
+  const labels = [t("m.calc.data", { n: trainedOn.toLocaleString(locale) }), t("m.calc.model"), aiLabel];
+
   return (
-    <div className="calc" role="status" aria-label={t("m.calcAria")}>
-      <div className="ring">
-        <svg viewBox="0 0 200 200" aria-hidden="true">
-          <circle cx="100" cy="100" r="84" fill="none" stroke="var(--line)" strokeWidth="10" />
+    <div className="sim" role="status" aria-label={t("m.calcAria")}>
+      <div className="sim-hud">
+        {hud
+          ? <span key={`v-${hud.k}`} className={`sim-big mono${hud.cls}`}>{hud.v}</span>
+          : <span key="v-sims" className="sim-big mono" ref={simsRef} />}
+        <span key={`k-${hud?.k ?? "sims"}`} className="sim-k">{hud?.k ?? t("m.calc.k.sims")}</span>
+      </div>
+      <div className="sim-core" data-fx="core" />
+      <div className={`sim-tally${simulating ? " on" : ""}`}>
+        <div className="sim-bar">
           {(["home", "draw", "away"] as const).map((k, i) => (
-            <circle key={k} className={`orbit o${i + 1}`} cx="100" cy="100" r="84" fill="none" stroke={`var(--c-${k})`}
-              strokeWidth="10" strokeLinecap="round" strokeDasharray={`${[74, 46, 60][i]} 528`} />
+            <i key={k} ref={(el) => { bars.current[i] = el; }} style={{ background: `var(--c-${k})`, flexGrow: fallback?.[i] ?? 1 }} />
           ))}
-        </svg>
-        <div className="ring-center">
-          <span className="calc-n mono">{n.toLocaleString(locale)}</span>
-          <span className="ring-k">{captions[Math.min(step, 2)]}</span>
+        </div>
+        <div className="sim-tl">
+          {[hs, t("common.draw"), as].map((label, i) => (
+            <span key={i}>{label}<b className="mono" ref={(el) => { tally.current[i] = el; }}>{fallback ? pct(fallback[i], 1) : null}</b></span>
+          ))}
         </div>
       </div>
-      <ol className="calc-steps">
-        {steps.map((label, i) => (
-          <li key={i} className={i < step ? "done" : i === step ? "on" : ""}>
-            <span className="step-dot" aria-hidden="true">{i < step ? "✓" : ""}</span>{label}
-          </li>
-        ))}
-      </ol>
+      <div className="sim-prog">
+        <div className="sim-segs">
+          {[0, 1, 2].map((i) => <span key={i} className={i < step ? "done" : i === step ? "on" : ""}><i /></span>)}
+        </div>
+        <span key={step} className="sim-step">{step >= 3 ? t("m.calc.lock") : labels[step]}</span>
+      </div>
     </div>
   );
 }
@@ -319,8 +419,8 @@ function TeamBlock({ p, side }: { p: Profile; side: string }) {
   const names = useNames();
   const formLabels = useFormLabels();
   return (
-    <div className="mteam">
-      <Crest team={p.team} size={110} />
+    <div className="mteam" style={{ "--team-c": p.team.colors[0] } as React.CSSProperties}>
+      <div className="mcrest" data-fx="crest"><Crest team={p.team} size={110} /></div>
       <h1>{names.team(p.team)}</h1>
       <div className="mteam-meta">
         <span>{side}</span><span className="dot" /><span>{ordinal(p.position, lang)} · {p.points} {t("common.pts")}</span>
