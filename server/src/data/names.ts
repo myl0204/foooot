@@ -3,11 +3,13 @@ import path from "node:path";
 import type { Dataset, League } from "../types.ts";
 import { aiEnabled } from "../ai/llm.ts";
 import { translateNames } from "../ai/translate.ts";
+import { CLUBS_ZH_BY_AF_ID } from "./clubsZh.ts";
 
 /**
  * Chinese display names for clubs and competitions.
- *   1. A curated dictionary of well-known clubs and leagues (works with no AI key).
- *   2. Everything else is translated once by the configured AI, in the background,
+ *   1. API-Football clubs: a reviewed table keyed by club id (clubsZh.ts).
+ *   2. A curated dictionary of well-known clubs and leagues by name (any provider, works with no AI key).
+ *   3. Everything else is translated once by the configured AI, in the background,
  *      and remembered in data/names-zh.json. Names are set in place on the Team and
  *      League objects, so they appear as soon as a translation lands.
  */
@@ -31,12 +33,12 @@ const CLUBS: string[][] = [
   ["西汉姆联", "West Ham", "West Ham United"], ["狼队", "Wolves", "Wolverhampton", "Wolverhampton Wanderers"],
   ["利兹联", "Leeds", "Leeds United"], ["伯恩利", "Burnley"], ["桑德兰", "Sunderland"], ["莱斯特城", "Leicester", "Leicester City"],
   ["南安普顿", "Southampton"], ["伊普斯维奇", "Ipswich", "Ipswich Town"], ["卢顿", "Luton", "Luton Town"],
-  ["谢菲尔德联", "Sheffield Utd", "Sheffield United"], ["考文垂", "Coventry", "Coventry City"], ["赫尔城", "Hull City"],
+  ["谢菲联", "Sheffield Utd", "Sheffield United"], ["考文垂", "Coventry", "Coventry City"], ["赫尔城", "Hull City"],
   ["米德尔斯堡", "Middlesbrough"], ["诺维奇", "Norwich", "Norwich City"], ["西布朗", "West Brom", "West Bromwich Albion"],
   ["沃特福德", "Watford"], ["斯旺西", "Swansea", "Swansea City"], ["斯托克城", "Stoke", "Stoke City"],
   ["布莱克本", "Blackburn", "Blackburn Rovers"], ["女王公园巡游者", "QPR", "Queens Park Rangers"], ["布里斯托尔城", "Bristol City"],
   ["普雷斯顿", "Preston", "Preston North End"], ["德比郡", "Derby", "Derby County"], ["米尔沃尔", "Millwall"],
-  ["卡迪夫城", "Cardiff", "Cardiff City"], ["朴茨茅斯", "Portsmouth"], ["雷克斯汉姆", "Wrexham"],
+  ["卡迪夫城", "Cardiff", "Cardiff City"], ["朴茨茅斯", "Portsmouth"], ["雷克瑟姆", "Wrexham"],
   ["普利茅斯", "Plymouth", "Plymouth Argyle"], ["牛津联", "Oxford United"], ["查尔顿", "Charlton", "Charlton Athletic"],
   ["谢周三", "Sheffield Wednesday", "Sheffield Wed"], ["伯明翰", "Birmingham", "Birmingham City"],
   // Spain
@@ -52,7 +54,7 @@ const CLUBS: string[][] = [
   ["那不勒斯", "Napoli"], ["罗马", "Roma", "AS Roma"], ["拉齐奥", "Lazio"], ["亚特兰大", "Atalanta"], ["佛罗伦萨", "Fiorentina"],
   ["博洛尼亚", "Bologna"], ["都灵", "Torino"], ["乌迪内斯", "Udinese"], ["热那亚", "Genoa"], ["莱切", "Lecce"],
   ["卡利亚里", "Cagliari"], ["维罗纳", "Verona", "Hellas Verona"], ["恩波利", "Empoli"], ["帕尔马", "Parma"], ["科莫", "Como", "Como 1907"],
-  ["威尼斯", "Venezia"], ["蒙扎", "Monza"], ["萨索洛", "Sassuolo"], ["比萨", "Pisa"], ["克雷莫内塞", "Cremonese"],
+  ["威尼斯", "Venezia"], ["蒙扎", "Monza"], ["萨索洛", "Sassuolo"], ["比萨", "Pisa"], ["克雷莫纳", "Cremonese"],
   ["萨勒尼塔纳", "Salernitana"], ["弗罗西诺内", "Frosinone"],
   // Germany
   ["拜仁", "Bayern Munich", "Bayern München", "FC Bayern München", "Bayern"], ["多特蒙德", "Borussia Dortmund", "Dortmund"],
@@ -125,7 +127,7 @@ export function applyChineseNames(datasets: Dataset[]) {
 function assign() {
   for (const d of latest) {
     d.league.nameZh ??= leagueZh(d.league);
-    for (const t of d.teams) t.nameZh ??= clubZh(t.name);
+    for (const t of d.teams) t.nameZh ??= (d.source === "api-football" ? CLUBS_ZH_BY_AF_ID[t.id] : undefined) ?? clubZh(t.name);
   }
 }
 

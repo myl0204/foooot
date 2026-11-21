@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { buildDemoDataset } from "../data/demo.ts";
 import { roundNumber, seasonComplete, toDataset, type AFFixture, type AFLeague } from "../data/apiFootball.ts";
 import { clubCode, needsRefresh } from "../data/http.ts";
+import { CLUBS_ZH_BY_AF_ID } from "../data/clubsZh.ts";
 import { applyChineseNames, normName } from "../data/names.ts";
 import type { Dataset, Match } from "../types.ts";
 import { Engine } from "./predict.ts";
@@ -150,9 +151,14 @@ console.log("sample", d.home.team.name, "v", d.away.team.name, {
       .map((name, i) => ({ id: String(i), name, short: clubCode(name), colors: ["#000000", "#ffffff"] as [string, string] })),
     matches: [],
   };
+  // Ids 33 and 836 are in the reviewed API-Football table (a stale English name doesn't matter); 999999 falls back to the dictionary.
+  ds.teams.push({ id: "836", name: "SHANGHAI SIPG", short: "SIP", colors: ["#000000", "#ffffff"] }, { id: "999999", name: "Liverpool", short: "LIV", colors: ["#000000", "#ffffff"] });
+  ds.teams[0].id = "33";
   applyChineseNames([ds]);
   assert.equal(ds.league.nameZh, "英超");
-  assert.deepEqual(ds.teams.map((t) => t.nameZh), ["曼联", "曼联", "马竞", "AC米兰", "大巴黎", "拜仁", "上海海港", undefined]);
+  assert.deepEqual(ds.teams.map((t) => t.nameZh), ["曼联", "曼联", "马竞", "AC米兰", "大巴黎", "拜仁", "上海海港", undefined, "上海海港", "利物浦"]);
+  const zh = Object.values(CLUBS_ZH_BY_AF_ID);
+  assert.equal(new Set(zh).size, zh.length, "no two clubs share a Chinese name");
 }
 
 console.log("ok");

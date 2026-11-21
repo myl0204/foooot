@@ -388,8 +388,26 @@ code { font-family: var(--mono); font-size: 0.85em; color: var(--gold-2); }
 .foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; max-width: 1240px; margin: 0 auto; padding: 28px clamp(16px, 4vw, 48px) 40px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
 
 /* ---------- competition switcher ---------- */
-.leagues-wrap { max-width: 1240px; margin: 0 auto; padding: 14px clamp(16px, 4vw, 48px) 0; }
-.leagues { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px; mask-image: linear-gradient(90deg, #000 92%, transparent); }
+.leagues-wrap { position: relative; max-width: 1240px; margin: 0 auto; padding: 14px clamp(16px, 4vw, 48px) 0; }
+.leagues-row { display: flex; align-items: center; gap: 8px; }
+.leagues { flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px; mask-image: linear-gradient(90deg, #000 92%, transparent); }
+.leagues-all {
+  flex: none; display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--surface); font-size: 13px; color: var(--ink); white-space: nowrap;
+}
+.leagues-all svg { transition: transform .2s; }
+.leagues-all.open svg { transform: rotate(180deg); }
+.leagues-all:hover, .leagues-all.open { border-color: rgba(217, 184, 112, .55); }
+.leagues-all:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.league-panel {
+  position: absolute; z-index: 15; top: calc(100% + 8px); left: clamp(16px, 4vw, 48px); right: clamp(16px, 4vw, 48px);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px 24px; padding: 18px 20px 20px;
+  border: 1px solid var(--line-2); border-radius: var(--radius); background: rgba(12, 14, 18, .97); backdrop-filter: blur(14px);
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .8); animation: panelin .18s ease-out;
+}
+.league-panel h4 { margin: 0 0 10px; font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.league-panel .league-grid { flex-wrap: wrap; overflow: visible; mask-image: none; }
+@keyframes panelin { from { opacity: 0; transform: translateY(-4px); } }
 .leagues::-webkit-scrollbar { display: none; }
 .leagues button {
   flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border-radius: 999px; cursor: pointer;

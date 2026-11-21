@@ -15,19 +15,13 @@ const BASE = "https://v3.football.api-sports.io";
 
 /** API-Football league ids. Override with API_FOOTBALL_LEAGUES. */
 export const DEFAULT_LEAGUES = [
-  39, // Premier League
-  140, // La Liga
-  135, // Serie A
-  78, // Bundesliga
-  61, // Ligue 1
-  2, // UEFA Champions League
-  40, // Championship
-  88, // Eredivisie
-  94, // Primeira Liga
-  169, // Chinese Super League
-  98, // J1 League
-  292, // K League 1
-];
+  39, 140, 135, 78, 61, // Premier League, La Liga, Serie A, Bundesliga, Ligue 1
+  2, 3, 848, // Champions League, Europa League, Conference League
+  40, 41, // Championship, League One
+  88, 94, 144, 203, 179, // Eredivisie, Primeira Liga, Belgian Pro League, Süper Lig, Scottish Premiership
+  71, 128, 253, 262, // Brasileirão, Argentine Liga Profesional, MLS, Liga MX
+  169, 98, 292, 307, 188, // Chinese Super League, J1 League, K League 1, Saudi Pro League, A-League
+]
 
 interface AFTeam { id: number; name: string; logo?: string }
 export interface AFFixture {
@@ -105,6 +99,8 @@ export interface ApiFootballOptions {
 }
 
 const DAY = 86_400_000;
+/** Current seasons the plan refused ("league-season" → when, why). In memory only: a restart after upgrading retries at once. */
+const refusedCurrent = new Map<string, { at: number; msg: string }>();
 
 export async function fetchApiFootball(o: ApiFootballOptions): Promise<LoadResult> {
   const warnings: string[] = [];
@@ -135,6 +131,9 @@ export async function fetchApiFootball(o: ApiFootballOptions): Promise<LoadResul
     const meta = leagues.find((l) => l.league.id === id);
     const current = meta?.seasons.find((s) => s.current) ?? meta?.seasons.at(-1);
     if (!meta || !current) continue;
+    // Without its current season a league has nothing to forecast: don't spend requests on it.
+    const refused = refusedCurrent.get(`${id}-${current.year}`);
+    if (refused && Date.now() - refused.at < DAY) { warnings.push(`${meta.league.name} ${current.year}: ${refused.msg}`); continue; }
 
     const seasons: AFFixture[][] = [];
     for (let back = o.history; back >= 0; back--) {
@@ -173,11 +172,13 @@ export async function fetchApiFootball(o: ApiFootballOptions): Promise<LoadResul
       } catch (err) {
         const msg = (err as Error).message;
         if (err instanceof FatalApiError) fatal = msg;
-        else if (err instanceof PlanError && !isCurrent) writeCache(`${name}.denied`, msg);
+        else if (err instanceof PlanError && isCurrent) refusedCurrent.set(`${id}-${season}`, { at: Date.now(), msg });
+        else if (err instanceof PlanError) writeCache(`${name}.denied`, msg);
         if (cached) seasons.push(cached.body);
         if (isCurrent || !(err instanceof FatalApiError)) warnings.push(`${meta.league.name} ${season}: ${msg}`);
       }
     }
+    if (!seasons.some((fx) => fx.some((f) => f.league.season === current.year))) continue;
     const ds = toDataset(meta, current, seasons);
     if (ds) datasets.push(ds);
   }

@@ -25,29 +25,32 @@ let state: DataState | null = null;
 let loading: Promise<DataState> | null = null;
 let backfilling = false;
 
-/** Provider precedence: API-Football, then football-data.org, then the demo league. */
-function liveProvider(): { source: DataSource; load: (fetchHistory: boolean) => Promise<LoadResult> } | null {
+type Provider = { source: DataSource; load: (fetchHistory: boolean) => Promise<LoadResult> };
+
+/** Providers with a key, in precedence order: API-Football, then football-data.org. None: the demo league. */
+function liveProviders(): Provider[] {
   const history = toInt(process.env.HISTORY_SEASONS, 2, 0, 10);
+  const out: Provider[] = [];
   const afKey = process.env.API_FOOTBALL_KEY;
   if (afKey) {
     const ids = (process.env.API_FOOTBALL_LEAGUES ?? "").split(",").map((s) => Number.parseInt(s.trim(), 10)).filter((n) => n > 0);
-    return {
+    out.push({
       source: "api-football",
       load: (fetchHistory) => fetchApiFootball({
         key: afKey, leagues: ids.length ? ids : DEFAULT_LEAGUES, history, fetchHistory,
         refreshMinutes: toInt(process.env.API_FOOTBALL_REFRESH_MINUTES, 60, 5, 24 * 60),
       }),
-    };
+    });
   }
   const fdKey = process.env.FOOTBALL_DATA_API_KEY;
   if (fdKey) {
     const competitions = (process.env.FOOTBALL_DATA_COMPETITION || "PL").split(",").map((s) => s.trim()).filter(Boolean);
-    return {
+    out.push({
       source: "football-data.org",
       load: (fetchHistory) => fetchFootballData({ key: fdKey, competitions, history: Math.min(history, 3), fetchHistory, refreshMinutes: 30 }),
-    };
+    });
   }
-  return null;
+  return out;
 }
 
 function makeState(source: DataSource, datasets: Dataset[], warnings: string[]): DataState {
@@ -55,21 +58,26 @@ function makeState(source: DataSource, datasets: Dataset[], warnings: string[]):
   return { source, engines: datasets.map((d) => new Engine(d)), loadedAt: Date.now(), warnings };
 }
 
+/** The first provider with usable data wins; one that fails or returns nothing hands over to the next. */
 async function build(fetchHistory: boolean): Promise<{ next: DataState; pendingHistory: boolean }> {
-  const live = liveProvider();
-  if (!live) return { next: makeState("demo", [buildDemoDataset()], []), pendingHistory: false };
-  try {
-    const r = await live.load(fetchHistory);
-    for (const w of r.warnings) console.warn(`[data] ${w}`);
-    const usable = r.datasets.filter((d) => d.matches.some((m) => m.status === "finished"));
-    if (!usable.length) throw new Error(r.warnings[0] ?? "no finished matches returned");
-    const counts = usable.map((d) => `${d.league.name} ${d.matches.filter((m) => m.status === "finished").length}`).join(", ");
-    console.log(`[data] ${live.source}: ${counts}`);
-    return { next: makeState(live.source, usable, r.warnings), pendingHistory: r.pendingHistory };
-  } catch (err) {
-    console.error("[data] live provider failed, using demo league:", (err as Error).message);
-    return { next: makeState("demo", [buildDemoDataset()], [`Live data unavailable (${(err as Error).message}) — showing demo league.`]), pendingHistory: false };
+  const failed: string[] = [];
+  for (const live of liveProviders()) {
+    try {
+      const r = await live.load(fetchHistory);
+      for (const w of r.warnings) console.warn(`[data] ${w}`);
+      const usable = r.datasets.filter((d) => d.matches.some((m) => m.status === "finished"));
+      if (!usable.length) throw new Error(r.warnings[0] ?? "no finished matches returned");
+      const counts = usable.map((d) => `${d.league.name} ${d.matches.filter((m) => m.status === "finished").length}`).join(", ");
+      console.log(`[data] ${live.source}: ${counts}`);
+      const note = failed.length ? [`${failed.join("; ")} — using ${live.source}`] : [];
+      return { next: makeState(live.source, usable, [...note, ...r.warnings]), pendingHistory: r.pendingHistory };
+    } catch (err) {
+      console.error(`[data] ${live.source} failed:`, (err as Error).message);
+      failed.push(`${live.source} unavailable (${(err as Error).message})`);
+    }
   }
+  const warnings = failed.length ? [`${failed.join("; ")} — showing demo league.`] : [];
+  return { next: makeState("demo", [buildDemoDataset()], warnings), pendingHistory: false };
 }
 
 function reload(): Promise<DataState> {
