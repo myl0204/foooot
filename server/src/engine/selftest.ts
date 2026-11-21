@@ -81,6 +81,12 @@ console.log("sample", d.home.team.name, "v", d.away.team.name, {
   const homeGames = cur.matches.filter((m) => m.status === "finished" && m.homeId === dd.match.homeId).length;
   const vr = dd.home.venueRecord;
   assert.equal(vr.w + vr.d + vr.l, homeGames, "venue record is this season's");
+  const ev = e.evidence(dd.match.id)!;
+  assert.equal(ev.matches, e.trainedOn, "evidence covers the training set");
+  assert.equal(ev.seasons, 2, "evidence counts both seasons");
+  assert.ok(ev.clubs === 17 && ev.rows.length === Math.min(240, ev.matches), "evidence clubs and rows");
+  assert.ok(ev.rows.every((r) => ev.teams[r[1]] && ev.teams[r[2]]), "every evidence row's clubs are listed");
+  assert.ok(ev.rows[0][0] >= ev.rows.at(-1)![0], "evidence newest first");
   console.log("multi-season", { trainedOn: e.trainedOn, backtest: bt2.matches });
 }
 

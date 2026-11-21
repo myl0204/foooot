@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, kickoff, pct, providerName, useApi, type Analysis, type Detail, type FormEntry, type Meta, type PredictionResult, type Profile } from "../api";
+import { api, kickoff, pct, providerName, useApi, type Analysis, type Detail, type Evidence, type FormEntry, type Meta, type PredictionResult, type Profile, type Standing } from "../api";
 import { Crest } from "../components/Crest";
 import { ConfidenceDots, DuelRow, FormPills, OutcomeRing, ScoreGrid } from "../components/Charts";
 import { ordinal, useI18n, useNames, useRoundLabel, type Lang } from "../i18n";
 import { OracleFx, type FxMode } from "../fx/oracle";
 import { useLeague } from "../league";
 import { Empty, Loading } from "./Fixtures";
+import { Lab } from "./Lab";
 
 function useFormLabels() {
   const { t, lang } = useI18n();
@@ -28,6 +29,9 @@ export function MatchPage({ meta }: { meta?: Meta }) {
   const { league, setLeague } = useLeague();
   const { data: d, loading, error } = useApi<Detail>(`/matches/${id}`);
   const run = usePrediction(id, lang);
+  // Material for the run's read-out, fetched while the page is read.
+  const { data: evidence } = useApi<Evidence>(`/matches/${id}/evidence`);
+  const { data: board } = useApi<Standing[]>(d ? `/standings?league=${encodeURIComponent(d.league.id)}` : null);
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const fx = useOracleFx(canvas);
 
@@ -78,7 +82,7 @@ export function MatchPage({ meta }: { meta?: Meta }) {
         </div>
         <div className="mhero-grid">
           <TeamBlock p={H} side={t("common.home")} />
-          <div className={`mhero-center${p ? "" : " tall"}`}>
+          <div className="mhero-center">
             {finished && (
               <div className="ft">
                 <span className="ft-label">{t("m.fullTime")}</span>
@@ -104,7 +108,9 @@ export function MatchPage({ meta }: { meta?: Meta }) {
             ) : run.phase === "running" ? (
               run.instant
                 ? <div className="calc-quick"><span className="spinner" /></div>
-                : <Simulation fx={fx} step={run.step} trainedOn={d.trainedOn} result={run.result} hs={hs} as={as} aiLabel={aiLabel} />
+                : <Lab fx={fx} step={run.step} d={d} evidence={evidence} board={board} result={run.result}
+                    provider={meta?.aiEnabled ? providerName(meta.aiProvider) : null} aiDone={run.aiDone} aiFailed={Boolean(run.analysisErr)}
+                    stepLabel={[t("m.calc.data", { n: (evidence?.matches ?? d.trainedOn).toLocaleString(locale) }), t("m.calc.model"), aiLabel, t("m.calc.lock")][Math.min(run.step, 3)]} />
             ) : (
               <StartPanel finished={finished} trainedOn={d.trainedOn} error={run.error} onStart={() => void run.start()} onHover={(on) => fx?.setHover(on)} />
             )}
@@ -213,6 +219,7 @@ function usePrediction(matchId: string, lang: Lang) {
   const [analyses, setAnalyses] = useState<Partial<Record<Lang, Analysis>>>({});
   const [analysisErr, setAnalysisErr] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [aiDone, setAiDone] = useState(false);
   const runId = useRef(0); // bumping it abandons a run in flight
   const langNow = useRef(lang);
   langNow.current = lang;
@@ -221,25 +228,25 @@ function usePrediction(matchId: string, lang: Lang) {
     const id = ++runId.current;
     const live = () => runId.current === id;
     const hold = (ms: number) => (quick ? Promise.resolve() : sleep(ms));
-    setPhase("running"); setInstant(quick); setStep(0); setError(null); setAnalysisErr(null);
+    setPhase("running"); setInstant(quick); setStep(0); setError(null); setAnalysisErr(null); setAiDone(false);
     // The written analysis is the slow part: ask for it at once, alongside the model run.
     const l = langNow.current;
-    const analysis = api<Analysis>(`/matches/${matchId}/analysis?lang=${l}`, { method: "POST" })
-      .then((a) => ({ a }), (e: Error) => ({ err: e.message }));
+    const analysis = api<Analysis>(`/matches/${matchId}/analysis?lang=${l}`, { method: "POST" }).then(
+      (a) => { if (live()) setAnalyses({ [l]: a }); },
+      (e: Error) => { if (live()) setAnalysisErr(e.message); }, // the numbers still stand
+    ).finally(() => { if (live()) setAiDone(true); });
     const prediction = api<PredictionResult>(`/matches/${matchId}/prediction`, { method: "POST" });
     prediction.catch(() => { /* handled when awaited */ });
     try {
-      await hold(1500); // data streams in, the match count runs up
+      await hold(1800); // the data feed rolls, totals count up
       if (!live()) return;
       setStep(1);
-      const [res] = await Promise.all([prediction, hold(1500)]); // the vortex spins until the model is back
+      const [res] = await Promise.all([prediction, hold(1800)]); // ratings settle until the model is back
       if (!live()) return;
       setResult(res);
       setStep(2);
-      const [out] = await Promise.all([analysis, hold(3200)]); // Monte Carlo runs until the analysis is in
+      await Promise.all([analysis, hold(3600)]); // Monte Carlo runs until the analysis is in
       if (!live()) return;
-      if ("a" in out) setAnalyses({ [l]: out.a });
-      else setAnalysisErr(out.err); // the numbers still stand
       setStep(3);
       await hold(1100); // collapse and detonate
       if (!live()) return;
@@ -270,24 +277,7 @@ function usePrediction(matchId: string, lang: Lang) {
     return () => { live = false; };
   }, [phase, lang, matchId, have]);
 
-  return { phase, instant, step, result, analysis: analyses[lang], analysisErr, error, start };
-}
-
-/** Counts from 0 to `target` over `ms`. */
-function useCountUp(target: number, ms: number) {
-  const [n, setN] = useState(0);
-  useEffect(() => {
-    let raf = 0;
-    const t0 = performance.now();
-    const tick = (now: number) => {
-      const k = Math.min(1, (now - t0) / ms);
-      setN(Math.round(target * (1 - Math.pow(1 - k, 3))));
-      if (k < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target, ms]);
-  return n;
+  return { phase, instant, step, result, analysis: analyses[lang], analysisErr, aiDone, error, start };
 }
 
 function StartPanel({ finished, trainedOn, error, onStart, onHover }: {
@@ -331,87 +321,6 @@ function useOracleFx(canvas: HTMLCanvasElement | null) {
     return () => { e.destroy(); setFx(null); };
   }, [canvas]);
   return fx;
-}
-
-/**
- * Read-out for the run: a headline number per step (matches loaded, expected goals
- * scrambling then locking, simulated matches), the live home/draw/away tally of the
- * simulation, and progress through the three server steps.
- */
-function Simulation({ fx, step, trainedOn, result, hs, as, aiLabel }: {
-  fx: OracleFx | null; step: number; trainedOn: number; result: PredictionResult | null; hs: string; as: string; aiLabel: string;
-}) {
-  const { t, locale } = useI18n();
-  const matches = useCountUp(trainedOn, 1300);
-  const [scramble, setScramble] = useState("0.00 – 0.00");
-  const [showSims, setShowSims] = useState(false);
-  const simsRef = useRef<HTMLSpanElement>(null);
-  const tally = useRef<(HTMLElement | null)[]>([]);
-  const bars = useRef<(HTMLElement | null)[]>([]);
-  const simulating = step >= 2;
-
-  useEffect(() => {
-    if (step !== 1) return;
-    const n = () => (Math.random() * 3.4).toFixed(2);
-    const id = setInterval(() => setScramble(`${n()} – ${n()}`), 55);
-    return () => clearInterval(id);
-  }, [step]);
-
-  // Expected goals lock in first; then the counter of simulated matches takes over.
-  useEffect(() => {
-    if (!simulating || !fx) return;
-    const id = setTimeout(() => setShowSims(true), 1000);
-    return () => clearTimeout(id);
-  }, [simulating, fx]);
-
-  // Written straight to the DOM: the engine reports ~20 times a second.
-  useEffect(() => fx?.onStats((s) => {
-    if (simsRef.current) simsRef.current.textContent = s.sims.toLocaleString(locale);
-    [s.home, s.draw, s.away].forEach((v, i) => {
-      const label = tally.current[i], bar = bars.current[i];
-      if (label) label.textContent = pct(v, 1);
-      if (bar) bar.style.flexGrow = String(v);
-    });
-  }), [fx, locale]);
-
-  const p = result?.prediction;
-  const hud = step === 0 ? { v: matches.toLocaleString(locale), k: t("m.calc.k.data"), cls: "" }
-    : step === 1 || !p ? { v: scramble, k: t("m.calc.k.fit"), cls: " scramble" }
-    : !showSims ? { v: `${p.lambdaHome.toFixed(2)} – ${p.lambdaAway.toFixed(2)}`, k: t("m.calc.k.xg"), cls: " locked" }
-    : null;
-  // Without the canvas (reduced motion) the tally shows the model's own probabilities.
-  const fallback = !fx && p ? [p.pHome, p.pDraw, p.pAway] : null;
-  const labels = [t("m.calc.data", { n: trainedOn.toLocaleString(locale) }), t("m.calc.model"), aiLabel];
-
-  return (
-    <div className="sim" role="status" aria-label={t("m.calcAria")}>
-      <div className="sim-hud">
-        {hud
-          ? <span key={`v-${hud.k}`} className={`sim-big mono${hud.cls}`}>{hud.v}</span>
-          : <span key="v-sims" className="sim-big mono" ref={simsRef} />}
-        <span key={`k-${hud?.k ?? "sims"}`} className="sim-k">{hud?.k ?? t("m.calc.k.sims")}</span>
-      </div>
-      <div className="sim-core" data-fx="core" />
-      <div className={`sim-tally${simulating ? " on" : ""}`}>
-        <div className="sim-bar">
-          {(["home", "draw", "away"] as const).map((k, i) => (
-            <i key={k} ref={(el) => { bars.current[i] = el; }} style={{ background: `var(--c-${k})`, flexGrow: fallback?.[i] ?? 1 }} />
-          ))}
-        </div>
-        <div className="sim-tl">
-          {[hs, t("common.draw"), as].map((label, i) => (
-            <span key={i}>{label}<b className="mono" ref={(el) => { tally.current[i] = el; }}>{fallback ? pct(fallback[i], 1) : null}</b></span>
-          ))}
-        </div>
-      </div>
-      <div className="sim-prog">
-        <div className="sim-segs">
-          {[0, 1, 2].map((i) => <span key={i} className={i < step ? "done" : i === step ? "on" : ""}><i /></span>)}
-        </div>
-        <span key={step} className="sim-step">{step >= 3 ? t("m.calc.lock") : labels[step]}</span>
-      </div>
-    </div>
-  );
 }
 
 function TeamBlock({ p, side }: { p: Profile; side: string }) {

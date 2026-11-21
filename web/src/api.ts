@@ -36,6 +36,12 @@ export interface Standing {
   team: Team; position: number; played: number; w: number; d: number; l: number; gf: number; ga: number; points: number;
   form: ("W" | "D" | "L")[]; attackRating: number; defenseRating: number; elo: number; strength: number;
 }
+/** What the model learned from for one match: totals and recent results, newest first ([date, homeId, awayId, hg, ag]). */
+export interface Evidence {
+  matches: number; goals: number; seasons: number; clubs: number;
+  rows: [string, string, string, number, number][];
+  teams: Record<string, Team>;
+}
 export interface League { id: string; name: string; nameZh?: string; country?: string; season: string; seasonLabel: string; logo?: string }
 export interface LeagueInfo extends League { teams: number; played: number; upcoming: number; seasons: number }
 export type DataSource = "demo" | "football-data.org" | "api-football";

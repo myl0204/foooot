@@ -74,6 +74,14 @@ app.get("/api/matches/:id", route(async (req, res) => {
   res.json({ ...context, league: e.data.league });
 }));
 
+/** The results the model learned from for this match (the run's data feed). */
+app.get("/api/matches/:id/evidence", route(async (req, res) => {
+  const e = await engineForMatch(String(req.params.id));
+  const ev = e?.evidence(String(req.params.id));
+  if (!ev) return void res.status(404).json({ error: "not_found" });
+  res.json(ev);
+}));
+
 /** Run the model for one match (the UI's "start prediction"). */
 app.post("/api/matches/:id/prediction", route(async (req, res) => {
   const e = await engineForMatch(String(req.params.id));

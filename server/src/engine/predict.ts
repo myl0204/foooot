@@ -201,6 +201,30 @@ export class Engine {
     };
   }
 
+  /**
+   * What the model learned from for this match, compact: totals plus the most
+   * recent results (newest first) for the match page's data feed.
+   */
+  evidence(matchId: string, limit = 240) {
+    const match = this.byId.get(matchId);
+    if (!match) return null;
+    const played = this.snapshotFor(match).played;
+    const clubs = new Set<string>(), seasons = new Set<string>();
+    let goals = 0;
+    for (const m of played) {
+      clubs.add(m.homeId).add(m.awayId);
+      seasons.add(m.season);
+      goals += m.homeGoals! + m.awayGoals!;
+    }
+    const rows = played.slice(0, limit).map((m) => [m.date.slice(0, 10), m.homeId, m.awayId, m.homeGoals!, m.awayGoals!] as const);
+    const ids = new Set(rows.flatMap((r) => [r[1], r[2]]));
+    const teams = Object.fromEntries([...ids].map((id) => {
+      const t = this.team(id);
+      return [id, { id, name: t.name, short: t.short, nameZh: t.nameZh, colors: t.colors }];
+    }));
+    return { matches: played.length, goals, seasons: seasons.size, clubs: clubs.size, rows, teams };
+  }
+
   /** Score the walk-forward predictions for the last N numbered rounds (crossing into last season if needed). */
   backtest(rounds = 8) {
     const groups = [...this.rounds.values()]

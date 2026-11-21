@@ -1,12 +1,14 @@
 /**
- * Canvas show for the match page's forecast run, drawn over the whole match hero.
+ * Canvas layer for the match page's forecast run, drawn over the whole match hero.
  *
  *   idle      thin streams drift from both crests into the start button
- *   gather    "loading the data": both crests pour particles into the core
- *   fit       the core spins up into a vortex, ringed by the three outcome arcs
- *   simulate  the vortex bursts into the 6×6 scoreline grid, then a Monte Carlo
- *             run keeps firing sampled scorelines into it
- *   finale    the grid collapses into the core and detonates
+ *   gather    both crests pour particles (and their recent scorelines) into the read-out
+ *             ([data-fx=panel]; [data-fx=core] is its main area, where the finale detonates)
+ *   fit       lighter streams; the crests beat while the model fits
+ *   simulate  a Monte Carlo run fires sampled scorelines from the crests into the
+ *             6×6 grid ([data-fx=grid]) and plots the running home/draw/away
+ *             estimates converging ([data-fx=chart])
+ *   finale    grid and chart collapse into the panel's centre and detonate
  *   afterglow the blast fades out, then the loop stops
  *
  * The simulation is real: every scoreline is drawn from the model's own score
@@ -18,6 +20,8 @@ export type FxMode = "off" | "idle" | "gather" | "fit" | "simulate" | "finale" |
 export interface FxStats {
   sims: number;
   home: number; draw: number; away: number;
+  /** 95% margin of error on the leading outcome's estimate. */
+  err: number;
   top: { h: number; a: number; p: number } | null;
 }
 
@@ -29,16 +33,14 @@ export interface FxTeams {
 }
 
 type RGB = readonly [number, number, number];
-interface Anchor { x: number; y: number; r: number; w: number; h: number }
-type Kind = "stream" | "glyph" | "orbit" | "shot" | "implode" | "spark";
+interface Box { x: number; y: number; w: number; h: number; r: number } // centre, size
+type Kind = "stream" | "glyph" | "shot" | "implode" | "spark";
 
 interface Particle {
   kind: Kind;
   rgb: RGB; spr: HTMLCanvasElement; size: number; alpha: number;
-  // path particles: quadratic bezier from (x0,y0) through (cx,cy) to (x1,y1), t in [0,1]
+  // path particles: quadratic bezier from (x0,y0) through (cx,cy) to (x1,y1); t < 0 is a delay
   x0: number; y0: number; cx: number; cy: number; x1: number; y1: number; t: number; dur: number;
-  // orbit particles
-  r: number; rt: number; a: number; w: number; sq: number; tilt: number; age: number;
   // sparks
   x: number; y: number; vx: number; vy: number; life: number; max: number;
   cell: number; text: string;
@@ -53,22 +55,27 @@ const WHITE: RGB = [255, 246, 228];
 const OUT = { home: [226, 168, 66] as RGB, draw: [170, 158, 240] as RGB, away: [48, 204, 170] as RGB };
 const MAX_PARTICLES = 1800;
 const GRID = 6;
+const MONO = `"JetBrains Mono", ui-monospace, monospace`;
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 const pick = <T,>(xs: readonly T[]) => xs[Math.floor(Math.random() * xs.length)];
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const easeOut = (t: number) => 1 - Math.pow(1 - clamp01(t), 3);
-/** Simulated matches after `t` seconds: 10,000 in the first 2.6 s, then a steady climb. */
-const simTarget = (t: number) => Math.floor(10_000 * easeOut(t / 2.6) + Math.max(0, t - 2.6) * 6_000);
+/** Simulated matches after `t` seconds: 100,000 in the first 3 s, then a steady climb. */
+const simTarget = (t: number) => Math.floor(100_000 * easeOut(t / 3) + Math.max(0, t - 3) * 25_000);
+const fmtN = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
 export class OracleFx {
   private ctx: CanvasRenderingContext2D;
   private dpr = 1;
   private W = 0;
   private H = 0;
-  private home: Anchor = { x: 0, y: 0, r: 40, w: 80, h: 80 };
-  private away: Anchor = { x: 0, y: 0, r: 40, w: 80, h: 80 };
-  private core: Anchor = { x: 0, y: 0, r: 100, w: 200, h: 200 };
+  private home: Box = { x: 0, y: 0, w: 100, h: 100, r: 50 };
+  private away: Box = { x: 0, y: 0, w: 100, h: 100, r: 50 };
+  private core: Box = { x: 0, y: 0, w: 220, h: 220, r: 110 };
+  private panel: Box | null = null; // the whole read-out: streams enter at its edges
+  private gridBox: Box | null = null;
+  private chartBox: Box | null = null;
   private measured = false;
 
   private ps: Particle[] = [];
@@ -89,10 +96,9 @@ export class OracleFx {
   private teams: FxTeams = { homeColor: "", awayColor: "", homeLabel: "", awayLabel: "", homeGlyphs: [], awayGlyphs: [] };
   private sprites = new Map<string, HTMLCanvasElement>();
 
-  private energy = 0; // core glow
+  private energy = 0; // core glow (start button halo, finale charge)
   private flash = 0; // full-hero flash
-  private arcA = 0; // outcome arcs around the vortex
-  private gridA = 0;
+  private gridA = 0; // grid and chart opacity
   private detonated = false;
 
   // Monte Carlo over the score matrix
@@ -104,8 +110,10 @@ export class OracleFx {
   private hits = new Float64Array(GRID * GRID);
   private tally = { h: 0, d: 0, a: 0 };
   private sims = 0;
-  private simBase = 0; // draws made when the vortex burst, before the timed run
-  private pendingBurst = false;
+  private simBase = 0; // draws made in the opening volley, before the timed run
+  private history: [number, number, number, number][] = []; // [sims, home, draw, away], log-spaced
+  private nextRecord = 20;
+  private pendingVolley = false;
 
   private listeners = new Set<(s: FxStats) => void>();
   private statsAt = 0;
@@ -153,7 +161,7 @@ export class OracleFx {
     this.cdf = Float64Array.from(C, (c) => c / acc);
     this.cellsI = Int32Array.from(I);
     this.cellsJ = Int32Array.from(J);
-    if (this.pendingBurst) this.burstIntoGrid();
+    if (this.pendingVolley) this.volley();
   }
 
   setHover(on: boolean) { this.hover = on; }
@@ -187,11 +195,8 @@ export class OracleFx {
         this.resetRun();
         this.ignite();
         break;
-      case "fit":
-        this.spinUp();
-        break;
       case "simulate":
-        if (this.cdf) this.burstIntoGrid(); else this.pendingBurst = true;
+        if (this.cdf) this.volley(); else this.pendingVolley = true;
         break;
       case "finale":
         this.collapse();
@@ -205,7 +210,7 @@ export class OracleFx {
 
   // ---------- layout ----------
 
-  /** Anchors come from the DOM: [data-fx=crest] (home, away) and [data-fx=core]. */
+  /** Anchors come from the DOM: [data-fx=crest] ×2 (home, away), [data-fx=core], [data-fx=grid], [data-fx=chart]. */
   private measure() {
     const hr = this.hero.getBoundingClientRect();
     if (!hr.width || !hr.height) return;
@@ -215,25 +220,28 @@ export class OracleFx {
       this.canvas.width = Math.round(this.W * dpr);
       this.canvas.height = Math.round(this.H * dpr);
     }
-    const rel = (el: Element | null | undefined, fallback: Anchor): Anchor => {
-      if (!el) return fallback;
+    const box = (el: Element | null | undefined): Box | null => {
+      if (!el) return null;
       const r = el.getBoundingClientRect();
-      if (!r.width) return fallback;
-      return { x: r.left - hr.left + r.width / 2, y: r.top - hr.top + r.height / 2, r: Math.min(r.width, r.height) / 2, w: r.width, h: r.height };
+      if (!r.width || !r.height) return null;
+      return { x: r.left - hr.left + r.width / 2, y: r.top - hr.top + r.height / 2, w: r.width, h: r.height, r: Math.min(r.width, r.height) / 2 };
     };
     const crests = this.hero.querySelectorAll("[data-fx=crest]");
-    this.home = rel(crests[0], { x: this.W * 0.18, y: this.H / 2, r: 50, w: 100, h: 100 });
-    this.away = rel(crests[1], { x: this.W * 0.82, y: this.H / 2, r: 50, w: 100, h: 100 });
-    this.core = rel(this.hero.querySelector("[data-fx=core]"), { x: this.W / 2, y: this.H / 2, r: 110, w: 220, h: 220 });
+    this.home = box(crests[0]) ?? { x: this.W * 0.18, y: this.H / 2, w: 100, h: 100, r: 50 };
+    this.away = box(crests[1]) ?? { x: this.W * 0.82, y: this.H / 2, w: 100, h: 100, r: 50 };
+    this.core = box(this.hero.querySelector("[data-fx=core]")) ?? { x: this.W / 2, y: this.H / 2, w: 220, h: 220, r: 110 };
+    this.panel = box(this.hero.querySelector("[data-fx=panel]"));
+    this.gridBox = box(this.hero.querySelector("[data-fx=grid]"));
+    this.chartBox = box(this.hero.querySelector("[data-fx=chart]"));
     this.measured = true;
     this.sinceMeasure = 0;
   }
 
   private grid() {
-    const c = this.core;
+    const c = this.gridBox ?? this.core;
     const gutter = 26; // digits and team labels
     const size = Math.max(60, Math.min(c.w, c.h) - gutter);
-    const gap = Math.max(2, Math.round(size * 0.018));
+    const gap = Math.max(2, Math.round(size * 0.02));
     const cell = (size - gap * (GRID - 1)) / GRID;
     const x = c.x - (size + gutter) / 2 + gutter;
     const y = c.y - (size + gutter) / 2 + gutter;
@@ -246,7 +254,13 @@ export class OracleFx {
     return [g.x + j * (g.cell + g.gap) + g.cell / 2, g.y + i * (g.cell + g.gap) + g.cell / 2];
   }
 
-  private vortexRadius() { return Math.max(40, Math.min(this.core.w, this.core.h) / 2 - 16); }
+  /** Where a crest's stream enters the panel: its near side, or its top when the panel sits below the crests (phones). */
+  private entry(side: "home" | "away"): [number, number] {
+    const c = this.panel ?? this.core, a = side === "home" ? this.home : this.away;
+    if (c.y - c.h / 2 > a.y + a.r * 0.5) return [c.x + rand(-0.45, 0.45) * c.w, c.y - c.h / 2 + rand(0, 8)];
+    const x = side === "home" ? c.x - c.w / 2 + rand(0, 8) : c.x + c.w / 2 - rand(0, 8);
+    return [x, c.y + rand(-0.4, 0.4) * c.h];
+  }
 
   // ---------- particles ----------
 
@@ -275,7 +289,6 @@ export class OracleFx {
     const p: Particle = {
       kind, rgb, spr: this.sprite(rgb), size, alpha: 1,
       x0: 0, y0: 0, cx: 0, cy: 0, x1: 0, y1: 0, t: 0, dur: 1,
-      r: 0, rt: 0, a: 0, w: 0, sq: 1, tilt: 0, age: 0,
       x: 0, y: 0, vx: 0, vy: 0, life: 1, max: 1,
       cell: -1, text: "",
       ...extra,
@@ -297,20 +310,15 @@ export class OracleFx {
     });
   }
 
-  private fromCrest(a: Anchor): [number, number] {
+  private fromCrest(a: Box): [number, number] {
     const ang = rand(0, TAU), rr = a.r * Math.sqrt(Math.random()) * 0.85;
     return [a.x + Math.cos(ang) * rr, a.y + Math.sin(ang) * rr];
   }
 
-  private intoCore(spread: number): [number, number] {
-    const ang = rand(0, TAU), rr = spread * Math.sqrt(Math.random());
-    return [this.core.x + Math.cos(ang) * rr, this.core.y + Math.sin(ang) * rr];
-  }
-
-  private stream(side: "home" | "away", dur: number, size: number, alpha = 1, spread = 10) {
+  private stream(side: "home" | "away", dur: number, size: number, alpha = 1, to?: [number, number]) {
     const a = side === "home" ? this.home : this.away;
     const rgb = side === "home" ? this.homeRgb : this.awayRgb;
-    this.path("stream", rgb, size, this.fromCrest(a), this.intoCore(spread), dur, 0.32, { alpha });
+    this.path("stream", rgb, size, this.fromCrest(a), to ?? this.entry(side), dur, 0.3, { alpha });
   }
 
   private glyph(side: "home" | "away") {
@@ -318,7 +326,7 @@ export class OracleFx {
     if (!list.length) return;
     const a = side === "home" ? this.home : this.away;
     const rgb = side === "home" ? this.homeRgb : this.awayRgb;
-    this.path("glyph", rgb, rand(10, 13), this.fromCrest(a), this.intoCore(16), rand(1.0, 1.5), 0.45, { text: pick(list) });
+    this.path("glyph", rgb, rand(10, 13), this.fromCrest(a), this.entry(side), rand(0.9, 1.4), 0.4, { text: pick(list) });
   }
 
   private spark(x: number, y: number, rgb: RGB, speed: number, life: number, size: number) {
@@ -330,48 +338,23 @@ export class OracleFx {
     this.waves.push({ x, y, r, v, life: 1, decay, rgb, width });
   }
 
-  private orbit(rgb: RGB, from?: [number, number]) {
-    const R = this.vortexRadius();
-    const rt = 12 + (R - 12) * Math.pow(Math.random(), 0.75);
-    const disc = Math.random() < 0.8;
-    const p = this.add("orbit", rgb, rand(8, 15), {
-      rt, a: rand(0, TAU), w: rand(0.75, 1.3),
-      sq: disc ? rand(0.28, 0.48) : rand(0.8, 1),
-      tilt: disc ? -0.32 + rand(-0.12, 0.12) : rand(-1.2, 1.2),
-    });
-    if (p && from) {
-      // Join the vortex where the stream arrived.
-      p.r = Math.hypot(from[0] - this.core.x, from[1] - this.core.y);
-      p.a = Math.atan2(from[1] - this.core.y, from[0] - this.core.x);
-    }
-    return p;
-  }
-
   // ---------- the run ----------
 
   private resetRun() {
     this.counts.fill(0); this.shown.fill(0); this.hits.fill(0);
     this.tally = { h: 0, d: 0, a: 0 };
     this.sims = 0; this.simBase = 0;
-    this.pendingBurst = false; this.detonated = false;
-    this.energy = 0; this.arcA = 0; this.gridA = 0;
+    this.history = []; this.nextRecord = 20;
+    this.pendingVolley = false; this.detonated = false;
+    this.energy = 0; this.gridA = 0;
   }
 
   private ignite() {
     const { x, y } = this.core;
-    this.wave(x, y, GOLD, 760, 0.9, 4, 40);
-    this.wave(x, y, WHITE, 460, 1.3, 2, 20);
+    this.wave(x, y, GOLD, 820, 0.9, 4, 40);
+    this.wave(x, y, WHITE, 480, 1.3, 2, 20);
     for (let k = 0; k < 110; k++) this.spark(x, y, Math.random() < 0.7 ? GOLD : WHITE, rand(80, 560), rand(0.5, 1.2), rand(8, 16));
     this.flash = 0.45;
-  }
-
-  private spinUp() {
-    const { x, y } = this.core;
-    this.wave(x, y, GOLD, 320, 1.4, 2, 10);
-    for (let k = 0; k < 340; k++) {
-      const p = this.orbit(k % 5 === 0 ? GOLD : k % 2 ? this.homeRgb : this.awayRgb);
-      if (p) p.r = 0;
-    }
   }
 
   private sample(): [number, number] {
@@ -385,7 +368,7 @@ export class OracleFx {
     return [this.cellsI[lo], this.cellsJ[lo]];
   }
 
-  /** One simulated match: tally it, return its grid cell and outcome colour. */
+  /** One simulated match: tally it, return its grid cell and outcome. */
   private simulate(): { cell: number; rgb: RGB; side: "home" | "away" | "draw" } {
     const [i, j] = this.sample();
     this.sims++;
@@ -393,34 +376,26 @@ export class OracleFx {
     this.tally[side === "home" ? "h" : side === "away" ? "a" : "d"]++;
     const cell = Math.min(i, GRID - 1) * GRID + Math.min(j, GRID - 1);
     this.counts[cell]++;
+    if (this.sims >= this.nextRecord) {
+      const n = this.sims;
+      this.history.push([n, this.tally.h / n, this.tally.d / n, this.tally.a / n]);
+      this.nextRecord = Math.ceil(n * 1.05);
+    }
     return { cell, rgb: OUT[side], side };
   }
 
-  private shoot(cell: number, rgb: RGB, from: [number, number], dur: number, size: number) {
-    return this.path("shot", rgb, size, from, this.cellCenter(cell), dur, 0.28, { cell });
+  private shoot(s: { cell: number; rgb: RGB; side: string }, delay = 0) {
+    // Home wins fly from the home crest, away wins from the away crest, draws from either.
+    const src = s.side === "home" ? this.home : s.side === "away" ? this.away : Math.random() < 0.5 ? this.home : this.away;
+    const dur = rand(0.5, 0.95);
+    this.path("shot", s.rgb, rand(9, 14), this.fromCrest(src), this.cellCenter(s.cell), dur, 0.28, { cell: s.cell, t: -delay / dur });
   }
 
-  private burstIntoGrid() {
-    this.pendingBurst = false;
-    const { x, y } = this.core;
-    this.wave(x, y, GOLD, 900, 1.1, 3, 10);
-    this.wave(x, y, WHITE, 600, 1.6, 1.5, 6);
-    this.flash = Math.max(this.flash, 0.3);
-    // Every particle of the vortex becomes one simulated match.
-    for (const p of this.ps) {
-      if (p.kind !== "orbit" && p.kind !== "stream") continue;
-      const s = this.simulate();
-      const from = this.pos(p);
-      Object.assign(p, {
-        kind: "shot", rgb: s.rgb, spr: this.sprite(s.rgb), cell: s.cell, t: 0, dur: rand(0.35, 0.9),
-        x0: from[0], y0: from[1],
-      } satisfies Partial<Particle>);
-      const [x1, y1] = this.cellCenter(s.cell);
-      const dx = x1 - p.x0, dy = y1 - p.y0, d = Math.hypot(dx, dy) || 1, off = rand(-0.5, 0.5) * d;
-      p.x1 = x1; p.y1 = y1;
-      p.cx = (p.x0 + x1) / 2 - (dy / d) * off;
-      p.cy = (p.y0 + y1) / 2 + (dx / d) * off;
-    }
+  /** The opening salvo: a few hundred matches fired at once. */
+  private volley() {
+    this.pendingVolley = false;
+    for (const side of [this.home, this.away]) this.wave(side.x, side.y, GOLD, 260, 1.4, 3, side.r);
+    for (let k = 0; k < 360; k++) this.shoot(this.simulate(), rand(0, 0.45));
     this.simBase = this.sims;
     this.emitStats(true);
   }
@@ -428,15 +403,26 @@ export class OracleFx {
   private collapse() {
     const g = this.grid();
     const max = Math.max(1, ...this.shown);
+    const centre: [number, number] = [this.core.x, this.core.y];
+    const into = (): [number, number] => [centre[0] + rand(-4, 4), centre[1] + rand(-4, 4)];
     for (let c = 0; c < GRID * GRID; c++) {
       const b = Math.pow(this.shown[c] / max, 0.6);
       const n = Math.round(b * 12) + (b > 0.02 ? 1 : 0);
       const i = Math.floor(c / GRID), j = c % GRID;
       const rgb = i > j ? OUT.home : i < j ? OUT.away : OUT.draw;
+      const [cx, cy] = this.cellCenter(c);
       for (let k = 0; k < n; k++) {
-        const [cx, cy] = this.cellCenter(c);
         const from: [number, number] = [cx + rand(-0.4, 0.4) * g.cell, cy + rand(-0.4, 0.4) * g.cell];
-        this.path("implode", Math.random() < 0.5 ? GOLD : rgb, rand(9, 15), from, this.intoCore(4), rand(0.4, 0.68), 0.6, { t: -rand(0, 0.35) });
+        this.path("implode", Math.random() < 0.5 ? GOLD : rgb, rand(9, 15), from, into(), rand(0.4, 0.68), 0.6, { t: -rand(0, 0.35) });
+      }
+    }
+    // The chart's three lines pour in too.
+    const ch = this.chartBox;
+    if (ch) {
+      for (let k = 0; k < 60; k++) {
+        const rgb = pick([OUT.home, OUT.draw, OUT.away]);
+        const from: [number, number] = [ch.x + rand(-0.45, 0.45) * ch.w, ch.y + rand(-0.4, 0.4) * ch.h];
+        this.path("implode", rgb, rand(8, 13), from, into(), rand(0.4, 0.7), 0.5, { t: -rand(0, 0.35) });
       }
     }
   }
@@ -492,40 +478,35 @@ export class OracleFx {
 
   private update(dt: number) {
     const m = this.mode, t = this.modeT;
+    const side = () => (Math.random() < 0.5 ? "home" : "away") as "home" | "away";
+    const density = this.W < 640 ? 0.4 : 1; // phones: the streams cross the read-out, keep them light
 
     if (m === "idle") {
-      this.emit(this.hover ? 46 : 14, dt, () =>
-        this.stream(Math.random() < 0.5 ? "home" : "away", rand(1.5, 2.4), rand(6, 11), 0.6, this.core.r * 0.35));
+      this.emit(this.hover ? 46 : 14, dt, () => {
+        const s = side(), c = this.core, ang = rand(0, TAU), rr = c.r * 0.3 * Math.sqrt(Math.random());
+        this.stream(s, rand(1.5, 2.4), rand(6, 11), 0.6, [c.x + Math.cos(ang) * rr, c.y + Math.sin(ang) * rr]);
+      });
       this.energy += ((this.hover ? 0.35 : 0.12) - this.energy) * Math.min(1, dt * 3);
     } else if (m === "gather") {
-      const ramp = easeOut(t / 0.4);
-      this.emit(300 * ramp, dt, () => {
-        const side = Math.random() < 0.5 ? "home" : "away";
-        if (Math.random() < 0.08) this.glyph(side);
-        else this.stream(side, rand(0.45, 0.95), rand(9, 17));
+      this.energy = Math.max(0, this.energy - dt * 2);
+      this.emit(320 * density * easeOut(t / 0.4), dt, () => {
+        const s = side();
+        if (Math.random() < 0.1) this.glyph(s); else this.stream(s, rand(0.45, 0.9), rand(9, 17));
       });
     } else if (m === "fit") {
-      this.emit(90, dt, () => this.stream(Math.random() < 0.5 ? "home" : "away", rand(0.7, 1.1), rand(8, 14), 1, this.vortexRadius() * 0.6));
-      this.arcA = Math.min(1, this.arcA + dt * 2);
-      this.energy = 0.8 + 0.25 * Math.sin(this.time * 7);
-    } else if (m === "simulate" && this.cdf && !this.pendingBurst) {
-      this.arcA = Math.max(0, this.arcA - dt * 3);
+      this.emit(110 * density, dt, () => this.stream(side(), rand(0.5, 0.9), rand(8, 14)));
+    } else if (m === "simulate" && this.cdf && !this.pendingVolley) {
       this.gridA = Math.min(1, this.gridA + dt * 2.5);
-      this.energy += (0.12 - this.energy) * Math.min(1, dt * 2);
-      const n = Math.min(4000, this.simBase + simTarget(t) - this.sims);
-      const visual = t < 2.6 ? 7 : 2;
+      const n = Math.min(6000, this.simBase + simTarget(t) - this.sims);
+      const visual = Math.max(1, Math.round((t < 3 ? 6 : 2) * density));
       for (let k = 0; k < n; k++) {
         const s = this.simulate();
-        if (k >= visual) continue;
-        // Home wins fly from the home crest, away wins from the away crest, draws from either.
-        const src = s.side === "home" ? this.home : s.side === "away" ? this.away : Math.random() < 0.5 ? this.home : this.away;
-        this.shoot(s.cell, s.rgb, this.fromCrest(src), rand(0.5, 0.95), rand(9, 14));
+        if (k < visual) this.shoot(s);
       }
       for (let c = 0; c < GRID * GRID; c++) this.shown[c] += (this.counts[c] - this.shown[c]) * Math.min(1, dt * 4);
       this.emitStats();
     } else if (m === "finale") {
       this.gridA = Math.max(0, 1 - t / 0.5);
-      this.arcA = 0;
       if (!this.detonated) this.energy = Math.min(1.8, this.energy + dt * 2.6);
       if (t >= 0.7 && !this.detonated) this.detonate();
     } else if (m === "afterglow") {
@@ -546,29 +527,18 @@ export class OracleFx {
     for (let c = 0; c < GRID * GRID; c++) this.hits[c] = Math.max(0, this.hits[c] - dt * 3.5);
     this.flash = Math.max(0, this.flash - dt * (this.flash > 0.5 ? 1.6 : 2.4));
 
-    const spin = m === "fit" ? 1 + 2.4 * easeOut(t / 2.2) : 1;
     let w = 0;
     for (const p of this.ps) {
       let keep = true;
-      switch (p.kind) {
-        case "stream": case "glyph": case "shot": case "implode":
-          p.t += dt / p.dur;
-          if (p.t >= 1) { keep = false; this.arrive(p); }
-          break;
-        case "orbit":
-          p.age += dt;
-          p.r += (p.rt - p.r) * Math.min(1, dt * 3);
-          p.a += p.w * spin * dt * (70 / (p.r + 25));
-          if (m !== "fit" && m !== "gather") { p.alpha -= dt * 2; keep = p.alpha > 0; }
-          break;
-        case "spark": {
-          const drag = Math.exp(-dt * 2.6);
-          p.vx *= drag; p.vy *= drag;
-          p.x += p.vx * dt; p.y += p.vy * dt;
-          p.life -= dt;
-          keep = p.life > 0;
-          break;
-        }
+      if (p.kind === "spark") {
+        const drag = Math.exp(-dt * 2.6);
+        p.vx *= drag; p.vy *= drag;
+        p.x += p.vx * dt; p.y += p.vy * dt;
+        p.life -= dt;
+        keep = p.life > 0;
+      } else {
+        p.t += dt / p.dur;
+        if (p.t >= 1) { keep = false; this.arrive(p); }
       }
       if (keep) this.ps[w++] = p;
     }
@@ -584,14 +554,13 @@ export class OracleFx {
   }
 
   private arrive(p: Particle) {
-    if (p.kind === "stream" || p.kind === "glyph") {
-      if (this.mode === "gather") this.energy = Math.min(1.1, this.energy + 0.012);
-      else if (this.mode === "fit" && p.kind === "stream" && this.ps.length < 700) this.orbit(p.rgb, [p.x1, p.y1]);
-    } else if (p.kind === "shot" && p.cell >= 0) {
+    if (p.kind === "shot" && p.cell >= 0) {
       this.hits[p.cell] = 1;
       if (Math.random() < 0.25) this.spark(p.x1, p.y1, p.rgb, rand(30, 90), rand(0.2, 0.4), rand(6, 10));
     } else if (p.kind === "implode") {
       this.energy = Math.min(1.8, this.energy + 0.01);
+    } else if ((p.kind === "stream" || p.kind === "glyph") && this.mode !== "idle" && Math.random() < 0.3) {
+      this.spark(p.x1, p.y1, p.rgb, rand(20, 70), rand(0.15, 0.35), rand(6, 10)); // splash on the panel's edge
     }
   }
 
@@ -601,9 +570,11 @@ export class OracleFx {
     const n = Math.max(1, this.sims);
     let top = -1, best = 0;
     for (let c = 0; c < GRID * GRID; c++) if (this.counts[c] > best) { best = this.counts[c]; top = c; }
+    const home = this.tally.h / n, draw = this.tally.d / n, away = this.tally.a / n;
+    const lead = Math.max(home, draw, away);
     const s: FxStats = {
-      sims: this.sims,
-      home: this.tally.h / n, draw: this.tally.d / n, away: this.tally.a / n,
+      sims: this.sims, home, draw, away,
+      err: 1.96 * Math.sqrt((lead * (1 - lead)) / n),
       top: top < 0 ? null : { h: Math.floor(top / GRID), a: top % GRID, p: best / n },
     };
     for (const f of this.listeners) f(s);
@@ -611,15 +582,9 @@ export class OracleFx {
 
   // ---------- drawing ----------
 
-  private pos(p: Particle, dt = 0): [number, number] {
+  private pos(p: Particle, back = 0): [number, number] {
     if (p.kind === "spark") return [p.x, p.y];
-    if (p.kind === "orbit") {
-      const a = p.a - dt;
-      const ca = Math.cos(a) * p.r, sa = Math.sin(a) * p.r * p.sq;
-      const ct = Math.cos(p.tilt), st = Math.sin(p.tilt);
-      return [this.core.x + ca * ct - sa * st, this.core.y + ca * st + sa * ct];
-    }
-    const t = clamp01(p.t - dt);
+    const t = clamp01(p.t - back);
     // Streams accelerate into their target; shots ease out to land softly.
     const u = p.kind === "shot" ? easeOut(t) : Math.pow(t, 1.6);
     const k = 1 - u;
@@ -644,8 +609,7 @@ export class OracleFx {
     ctx.globalCompositeOperation = "lighter";
 
     this.drawCore();
-    if (this.arcA > 0) this.drawArcs();
-    if (this.gridA > 0) this.drawGrid();
+    if (this.gridA > 0) { this.drawGrid(); this.drawChart(); }
 
     for (const w of this.waves) {
       ctx.globalAlpha = 1;
@@ -675,39 +639,22 @@ export class OracleFx {
 
   private drawParticle(p: Particle) {
     const ctx = this.ctx;
-    switch (p.kind) {
-      case "stream": case "shot": case "implode": {
-        if (p.t < 0) return;
-        const fade = p.kind === "shot" ? 1 : Math.min(1, p.t * 6);
-        for (let k = 0; k < 4; k++) {
-          const [x, y] = this.pos(p, k * 0.03);
-          this.stamp(p.spr, x, y, p.size * (1 - k * 0.16), p.alpha * fade * (1 - k * 0.28));
-        }
-        break;
-      }
-      case "glyph": {
-        const [x, y] = this.pos(p);
-        ctx.globalAlpha = Math.sin(Math.PI * clamp01(p.t)) * 0.9;
-        ctx.fillStyle = `rgb(${p.rgb})`;
-        ctx.font = `600 ${p.size}px "JetBrains Mono", ui-monospace, monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(p.text, x, y);
-        break;
-      }
-      case "orbit": {
-        const [x, y] = this.pos(p);
-        const depth = 0.6 + 0.4 * Math.sin(p.a); // front of the disc is brighter
-        const grow = Math.min(1, p.age * 2);
-        const [tx, ty] = this.pos(p, 0.14);
-        this.stamp(p.spr, tx, ty, p.size * 0.7 * depth, 0.35 * p.alpha * grow);
-        this.stamp(p.spr, x, y, p.size * depth, p.alpha * depth * grow);
-        break;
-      }
-      case "spark": {
-        const k = p.life / p.max;
-        this.stamp(p.spr, p.x, p.y, p.size * (0.4 + 0.6 * k), k);
-        break;
+    if (p.kind === "spark") {
+      const k = p.life / p.max;
+      this.stamp(p.spr, p.x, p.y, p.size * (0.4 + 0.6 * k), k);
+    } else if (p.kind === "glyph") {
+      const [x, y] = this.pos(p);
+      ctx.globalAlpha = Math.sin(Math.PI * clamp01(p.t)) * 0.9;
+      ctx.fillStyle = `rgb(${p.rgb})`;
+      ctx.font = `600 ${p.size}px ${MONO}`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(p.text, x, y);
+    } else if (p.t >= 0) {
+      const fade = p.kind === "shot" ? 1 : Math.min(1, p.t * 6) * (p.kind === "stream" ? Math.min(1, (1 - p.t) * 8) : 1);
+      for (let k = 0; k < 4; k++) {
+        const [x, y] = this.pos(p, k * 0.03);
+        this.stamp(p.spr, x, y, p.size * (1 - k * 0.16), p.alpha * fade * (1 - k * 0.28));
       }
     }
   }
@@ -717,7 +664,7 @@ export class OracleFx {
     const ctx = this.ctx;
     const { x, y } = this.core;
     const e = this.energy;
-    const R = this.vortexRadius() * (0.35 + 0.45 * Math.min(1.8, e));
+    const R = Math.min(this.core.w, this.core.h) * (0.18 + 0.22 * Math.min(1.8, e));
     const g = ctx.createRadialGradient(x, y, 0, x, y, R);
     g.addColorStop(0, `rgba(255,246,228,${Math.min(1, 0.75 * e)})`);
     g.addColorStop(0.25, `rgba(232,196,116,${Math.min(0.8, 0.45 * e)})`);
@@ -727,31 +674,6 @@ export class OracleFx {
     ctx.beginPath();
     ctx.arc(x, y, R, 0, TAU);
     ctx.fill();
-  }
-
-  /** Home, draw and away arcs chasing each other around the vortex, with comet tails. */
-  private drawArcs() {
-    const ctx = this.ctx;
-    const { x, y } = this.core;
-    const R = this.vortexRadius() + 10;
-    const spin = 1 + 1.6 * easeOut(this.modeT / 2.2);
-    const arcs: [RGB, number, number, number][] = [
-      [OUT.home, R, 2.3, 0], [OUT.draw, R + 6, -1.7, 2], [OUT.away, R + 12, 1.25, 4],
-    ];
-    ctx.lineCap = "round";
-    for (const [rgb, r, speed, phase] of arcs) {
-      const head = phase + this.time * speed * spin;
-      const len = 1.3, steps = 10, dir = Math.sign(speed);
-      for (let k = 0; k < steps; k++) {
-        const a0 = head - dir * len * (k + 1) / steps, a1 = head - dir * len * k / steps;
-        ctx.globalAlpha = this.arcA * Math.pow(1 - k / steps, 1.6);
-        ctx.strokeStyle = `rgb(${rgb})`;
-        ctx.lineWidth = 3.2 * (1 - k / (steps * 1.4));
-        ctx.beginPath();
-        ctx.arc(x, y, r, Math.min(a0, a1), Math.max(a0, a1));
-        ctx.stroke();
-      }
-    }
   }
 
   private drawGrid() {
@@ -786,13 +708,14 @@ export class OracleFx {
     // Axis digits and team labels: rows are home goals, columns away goals.
     ctx.globalAlpha = 0.55 * this.gridA;
     ctx.fillStyle = "#b9b4aa";
-    ctx.font = `500 10px "JetBrains Mono", ui-monospace, monospace`;
+    ctx.font = `500 10px ${MONO}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (let k = 0; k < GRID; k++) {
       const off = k * (g.cell + g.gap) + g.cell / 2;
-      ctx.fillText(k === GRID - 1 ? `${k}+` : String(k), g.x + off, g.y - 8);
-      ctx.fillText(k === GRID - 1 ? `${k}+` : String(k), g.x - 9, g.y + off);
+      const label = k === GRID - 1 ? `${k}+` : String(k);
+      ctx.fillText(label, g.x + off, g.y - 8);
+      ctx.fillText(label, g.x - 9, g.y + off);
     }
     ctx.globalAlpha = 0.8 * this.gridA;
     ctx.fillStyle = "#d9b870";
@@ -806,8 +729,8 @@ export class OracleFx {
     ctx.restore();
 
     // A scan line sweeps the grid while the analysis is written.
-    if (this.mode === "simulate" && this.modeT > 3) {
-      const k = ((this.modeT - 3) % 2.4) / 2.4;
+    if (this.mode === "simulate" && this.modeT > 3.2) {
+      const k = ((this.modeT - 3.2) % 2.4) / 2.4;
       const sy = g.y - 10 + k * (g.size + 20);
       const grd = ctx.createLinearGradient(0, sy - 18, 0, sy + 2);
       grd.addColorStop(0, "rgba(232,196,116,0)");
@@ -816,6 +739,67 @@ export class OracleFx {
       ctx.globalAlpha = this.gridA * Math.sin(Math.PI * k);
       ctx.fillStyle = grd;
       ctx.fillRect(g.x - 4, sy - 18, g.size + 8, 20);
+    }
+    ctx.globalCompositeOperation = "lighter";
+  }
+
+  /** Running home/draw/away estimates against the number of simulated matches (log scale), settling as the count grows. */
+  private drawChart() {
+    const c = this.chartBox;
+    if (!c || this.history.length < 2) return;
+    const ctx = this.ctx;
+    const A = this.gridA;
+    const left = c.x - c.w / 2, top = c.y - c.h / 2;
+    const x0 = left + 30, x1 = left + c.w - 44, y0 = top + 8, y1 = top + c.h - 18;
+    const nMax = Math.max(1000, this.sims);
+    const lMax = Math.log10(nMax);
+    const lx = (n: number) => x0 + ((Math.log10(Math.max(10, n)) - 1) / (lMax - 1)) * (x1 - x0);
+    const last = this.history[this.history.length - 1];
+    const yMax = Math.max(last[1], last[2], last[3]) > 0.7 ? 1 : 0.8;
+    const ly = (p: number) => y1 - (Math.min(p, yMax) / yMax) * (y1 - y0);
+
+    ctx.globalCompositeOperation = "source-over";
+    ctx.lineWidth = 1;
+    ctx.font = `500 9px ${MONO}`;
+    ctx.textBaseline = "middle";
+    for (let p = 0; p <= yMax + 1e-9; p += 0.2) {
+      ctx.globalAlpha = A;
+      ctx.strokeStyle = "rgba(255,255,255,0.07)";
+      ctx.beginPath(); ctx.moveTo(x0, ly(p)); ctx.lineTo(x1, ly(p)); ctx.stroke();
+      ctx.globalAlpha = 0.45 * A;
+      ctx.fillStyle = "#b9b4aa";
+      ctx.textAlign = "right";
+      ctx.fillText(`${Math.round(p * 100)}%`, x0 - 5, ly(p));
+    }
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (let e = 1; e <= lMax; e++) ctx.fillText(fmtN(10 ** e), lx(10 ** e), y1 + 5);
+
+    const series: [number, RGB][] = [[1, OUT.home], [2, OUT.draw], [3, OUT.away]];
+    const heads: { y: number; v: number; rgb: RGB }[] = [];
+    for (const [k, rgb] of series) {
+      ctx.globalAlpha = A;
+      ctx.strokeStyle = `rgb(${rgb})`;
+      ctx.lineWidth = 1.6;
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      this.history.forEach((h, i) => (i ? ctx.lineTo(lx(h[0]), ly(h[k])) : ctx.moveTo(lx(h[0]), ly(h[k]))));
+      ctx.stroke();
+      heads.push({ y: ly(last[k]), v: last[k], rgb });
+    }
+    // Glowing heads, and value labels kept apart.
+    ctx.globalCompositeOperation = "lighter";
+    for (const h of heads) this.stamp(this.sprite(h.rgb), lx(last[0]), h.y, 14, A);
+    heads.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < heads.length; i++) heads[i].y = Math.max(heads[i].y, heads[i - 1].y + 11);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.font = `600 10px ${MONO}`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    for (const h of heads) {
+      ctx.globalAlpha = A;
+      ctx.fillStyle = `rgb(${h.rgb})`;
+      ctx.fillText(`${(h.v * 100).toFixed(1)}%`, x1 + 6, h.y);
     }
     ctx.globalCompositeOperation = "lighter";
   }

@@ -103,6 +103,7 @@ English and Simplified Chinese. The **EN / 中** switch in the nav changes the l
 | GET | `/api/standings?league=` | Table + attack/defence/Elo/power index |
 | GET | `/api/model?league=` | Walk-forward backtest (accuracy, log-loss, Brier) |
 | GET | `/api/matches/:id` | Match context: team profiles, form, H2H, matches the model learnt from |
+| GET | `/api/matches/:id/evidence` | The results the model learned from for this match (totals + latest 240), for the run's data feed |
 | POST | `/api/matches/:id/prediction` | Run the model: probabilities, scoreline matrix, Elo (the UI's "Start prediction") |
 | POST | `/api/matches/:id/analysis?lang=en\|zh` | AI analysis (or statistical fallback) in the given language |
 
